@@ -113,6 +113,9 @@ typedef struct {
     GameState   state;
     int         attempt;
     int         best_pct;
+    uint32_t    dead_timer;
+    int         dead_pct;
+    bool        dead_new_best;
     uint32_t    frame;
 
     char    level_files[MAX_LEVELS][MAX_PATH_LEN];
@@ -339,6 +342,26 @@ static void game_reset(GeoApp* app) {
     app->snapping  = false;
     app->cam_x     = 0;
     app->frame     = 0;
+    app->dead_timer = 0;
+    app->dead_pct = 0;
+    app->dead_new_best = false;
+}
+
+static int game_pct(const GeoApp* app) {
+    if(app->level.length <= 0) return 0;
+    int pct = app->cam_x * 100 / app->level.length;
+    if(pct < 0) pct = 0;
+    if(pct > 100) pct = 100;
+    return pct;
+}
+
+static void game_begin_death(GeoApp* app) {
+    int pct = game_pct(app);
+    app->dead_pct = pct;
+    app->dead_new_best = (pct > app->best_pct);
+    if(app->dead_new_best) app->best_pct = pct;
+    app->dead_timer = 0;
+    app->state = GAMESTATE_DEAD;
 }
 
 static void game_start_level(GeoApp* app, int idx) {
@@ -376,7 +399,7 @@ static void game_update(GeoApp* app) {
 
     /* ── fall out of screen ── */
     if(app->py > (float)(SCREEN_H + 4)) {
-        app->state = GAMESTATE_DEAD;
+            game_begin_death(app);
         return;
     }
 
@@ -407,7 +430,7 @@ static void game_update(GeoApp* app) {
                     app->on_ground = true;
                 } else {
                     /* Hit from side or bottom → die */
-                    app->state = GAMESTATE_DEAD;
+                        game_begin_death(app);
                     return;
                 }
             }
@@ -421,7 +444,7 @@ static void game_update(GeoApp* app) {
             int hw = 4;
             int hh = 4;
             if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit, hx, hy, hw, hh)) {
-                app->state = GAMESTATE_DEAD;
+                    game_begin_death(app);
                 return;
             }
         }
@@ -459,9 +482,6 @@ static void game_update(GeoApp* app) {
     if(app->cam_x >= app->level.length) {
         if(100 > app->best_pct) app->best_pct = 100;
         app->state = GAMESTATE_WIN;
-    } else {
-        int pct = app->cam_x * 100 / app->level.length;
-        if(pct > app->best_pct) app->best_pct = pct;
     }
 }
 
@@ -565,8 +585,8 @@ static void render_callback(Canvas* canvas, void* ctx) {
         return;
     }
 
-    /* ─── PLAYING / PAUSE ─── */
-    if(app->state == GAMESTATE_PLAYING || app->state == GAMESTATE_PAUSE) {
+    /* ─── PLAYING / PAUSE / DEAD ─── */
+    if(app->state == GAMESTATE_PLAYING || app->state == GAMESTATE_PAUSE || app->state == GAMESTATE_DEAD) {
         draw_background(canvas, app->level.bg_style, app->cam_x);
 
         for(int i = 0; i < app->level.dec_count; i++)
@@ -574,6 +594,16 @@ static void render_callback(Canvas* canvas, void* ctx) {
 
         /* ground line */
         canvas_draw_line(canvas, 0, GROUND_Y, SCREEN_W - 1, GROUND_Y);
+
+        /* Attempt counter in level (world-space object) */
+        int attempt_x = 40 - app->cam_x;  /* at grid column 2.5 in level-space */
+        int attempt_y = GROUND_Y - 30;     /* slightly above ground */
+        if(attempt_x > -60 && attempt_x < SCREEN_W) {
+            canvas_set_font(canvas, FontPrimary);
+            char attempt_buf[16];
+            snprintf(attempt_buf, sizeof(attempt_buf), "Attempt %d", app->attempt);
+            canvas_draw_str(canvas, attempt_x, attempt_y, attempt_buf);
+        }
 
         /* objects */
         for(int i = 0; i < app->level.obj_count; i++) {
@@ -589,9 +619,11 @@ static void render_callback(Canvas* canvas, void* ctx) {
         }
 
         /* player */
-        int cx = PLAYER_GX * CELL + PLAYER_SIZE / 2;
-        int cy = (int)app->py + PLAYER_SIZE / 2;
-        draw_player_rotated(canvas, cx, cy, app->angle);
+        if(app->state != GAMESTATE_DEAD) {
+            int cx = PLAYER_GX * CELL + PLAYER_SIZE / 2;
+            int cy = (int)app->py + PLAYER_SIZE / 2;
+            draw_player_rotated(canvas, cx, cy, app->angle);
+        }
 
         /* HUD */
         int pct = (app->level.length > 0)
@@ -613,27 +645,14 @@ static void render_callback(Canvas* canvas, void* ctx) {
             canvas_draw_str(canvas, 38, 35, "PAUSED");
             canvas_set_font(canvas, FontSecondary);
             canvas_draw_str(canvas, 28, 47, "OK=Resume  Back=Quit");
+        } else if(app->state == GAMESTATE_DEAD && app->dead_new_best) {
+            canvas_set_font(canvas, FontPrimary);
+            canvas_draw_str(canvas, 33, 28, "NEW BEST");
+            canvas_set_font(canvas, FontSecondary);
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d%%", app->dead_pct);
+            canvas_draw_str(canvas, 54, 42, buf);
         }
-        return;
-    }
-
-    /* ─── DEAD ─── */
-    if(app->state == GAMESTATE_DEAD) {
-        canvas_set_font(canvas, FontPrimary);
-        canvas_draw_str(canvas, 35, 16, "YOU DIED");
-        canvas_set_font(canvas, FontSecondary);
-        char buf[32];
-        int pct = (app->level.length > 0)
-                  ? app->cam_x * 100 / app->level.length : 0;
-        if(pct < 0) pct = 0;
-        if(pct > 100) pct = 100;
-        snprintf(buf, sizeof(buf), "Reached: %d%%", pct);
-        canvas_draw_str(canvas, 28, 30, buf);
-        snprintf(buf, sizeof(buf), "Best:    %d%%", app->best_pct);
-        canvas_draw_str(canvas, 28, 40, buf);
-        snprintf(buf, sizeof(buf), "Attempt: %d", app->attempt);
-        canvas_draw_str(canvas, 28, 50, buf);
-        canvas_draw_str(canvas, 14, 62, "OK=Retry  Back=Menu");
         return;
     }
 
@@ -728,7 +747,6 @@ int32_t geoflip(void* p) {
                 break;
 
             case GAMESTATE_DEAD:
-                if(pressed && ev.key == InputKeyOk)   game_start_level(app, app->menu_sel);
                 if(pressed && ev.key == InputKeyBack)  app->state = GAMESTATE_MENU;
                 break;
 
@@ -744,10 +762,14 @@ int32_t geoflip(void* p) {
         }
 
         game_update(app);
-        view_port_update(vp);
 
-        if(app->state == GAMESTATE_DEAD && app->frame == 1)
-            notification_message(notif, &sequence_reset_vibro);
+        if(app->state == GAMESTATE_DEAD) {
+            app->dead_timer++;
+            if(app->dead_timer == 1) notification_message(notif, &sequence_reset_vibro);
+            if(app->dead_timer >= 63) game_start_level(app, app->menu_sel);
+        }
+
+        view_port_update(vp);
 
         furi_delay_ms(16);
     }
