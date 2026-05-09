@@ -8,6 +8,8 @@ App(
         "storage",
         "notification",
     ],
+    fap_icon="images/icon.png",
+    fap_icon_assets="images",
     stack_size=2 * 1024,
     fap_category="Games",
     fap_version="0.1",

@@ -106,6 +106,7 @@ typedef struct {
 
     /* menu */
     char    level_files[MAX_LEVELS][MAX_PATH_LEN];
+    char    level_names[MAX_LEVELS][64];
     int     level_count;
     int     menu_sel;
 
@@ -496,16 +497,14 @@ static void render_callback(Canvas* canvas, void* ctx) {
             canvas_draw_str(canvas, 8, 54, "Add .gdlvl files");
         } else {
             for(int i = 0; i < app->level_count; i++) {
-                /* extract filename from path */
-                const char* slash = strrchr(app->level_files[i], '/');
-                const char* fname = slash ? slash + 1 : app->level_files[i];
+                const char* title = app->level_names[i];
 
                 int y = 24 + i * 12;
                 if(i == app->menu_sel) {
                     canvas_draw_rbox(canvas, 2, y - 9, SCREEN_W - 4, 11, 2);
                     canvas_set_color(canvas, ColorWhite);
                 }
-                canvas_draw_str(canvas, 8, y, fname);
+                canvas_draw_str(canvas, 8, y, title);
                 canvas_set_color(canvas, ColorBlack);
             }
             canvas_draw_str(canvas, 2, 62, "OK=Play  Up/Dn=Select");
@@ -626,6 +625,22 @@ int32_t geoflip(void* p) {
 
     /* discover levels */
     app->level_count = discover_levels(app->level_files, MAX_LEVELS);
+
+    /* parse level titles for menu display */
+    for(int i = 0; i < app->level_count; i++) {
+        Level* tmp = malloc(sizeof(Level));
+        if(tmp && parse_level(app->level_files[i], tmp)) {
+            strncpy(app->level_names[i], tmp->name, sizeof(app->level_names[i]) - 1);
+            app->level_names[i][sizeof(app->level_names[i]) - 1] = '\0';
+        } else {
+            /* fallback to filename */
+            const char* slash = strrchr(app->level_files[i], '/');
+            const char* fname = slash ? slash + 1 : app->level_files[i];
+            strncpy(app->level_names[i], fname, sizeof(app->level_names[i]) - 1);
+            app->level_names[i][sizeof(app->level_names[i]) - 1] = '\0';
+        }
+        if(tmp) free(tmp);
+    }
 
     /* GUI */
     ViewPort* vp = view_port_alloc();
