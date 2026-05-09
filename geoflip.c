@@ -25,9 +25,9 @@
 #define GROUND_Y        54          /* Y of ground top edge            */
 #define PLAYER_X        20          /* fixed horizontal player position*/
 #define PLAYER_SIZE     8
-#define GRAVITY         0.55f
-#define JUMP_VEL        (-5.5f)
-#define SCROLL_SPEED    2           /* pixels per frame                */
+#define GRAVITY         0.25f
+#define JUMP_VEL        (-3.1f)      /* tuned for ~3 blocks peak height */
+#define SCROLL_SPEED    2.0f           /* pixels per frame                */
 #define MAX_OBSTACLES   64
 #define MAX_DECORATIONS 32
 #define LEVEL_DIR       "/ext/geoflip/levels"
@@ -91,7 +91,6 @@ typedef struct {
     float   prev_py;        /* previous Y for collision detection */
     bool    on_ground;
     bool    jump_held;
-    int     jump_count;     /* multi-jump counter */
     int     anim_tick;      /* rotation frame */
 
     /* world */
@@ -291,7 +290,6 @@ static void game_reset(GeoApp* app) {
     app->prev_py   = app->py;
     app->on_ground = true;
     app->jump_held = false;
-    app->jump_count = 0;
     app->cam_x     = 0;
     app->anim_tick = 0;
     app->frame     = 0;
@@ -327,7 +325,6 @@ static void game_update(GeoApp* app) {
         app->py        = ground_limit;
         app->vy        = 0.0f;
         app->on_ground = true;
-        app->jump_count = 0;
     } else {
         app->on_ground = false;
     }
@@ -340,12 +337,10 @@ static void game_update(GeoApp* app) {
 
     /* ── jump input ── */
     if(app->btn_jump) {
-        bool can_jump = app->on_ground || app->jump_count < 2;
-        if(can_jump && !app->jump_held) {
+        if(app->on_ground && !app->jump_held) {
             app->vy         = JUMP_VEL;
             app->on_ground  = false;
             app->jump_held  = true;
-            app->jump_count++;
         }
     } else {
         app->jump_held = false;
@@ -378,7 +373,6 @@ static void game_update(GeoApp* app) {
                     app->py        = (float)(oy - PLAYER_SIZE);
                     app->vy        = 0.0f;
                     app->on_ground = true;
-                    app->jump_count = 0;
                 } else {
                     app->state = GAMESTATE_DEAD;
                     return;
