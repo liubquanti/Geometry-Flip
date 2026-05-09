@@ -338,6 +338,7 @@ static void game_reset(GeoApp* app) {
     app->prev_py   = app->py;
     app->on_ground = true;
     app->jump_held = false;
+    app->btn_jump  = false;
     app->angle     = 0.0f;
     app->snapping  = false;
     app->cam_x     = 0;
@@ -490,9 +491,11 @@ static void game_update(GeoApp* app) {
 static void draw_spike(Canvas* canvas, int sx, int sy) {
     /* Triangle pointing up within CELL×CELL */
     int x = sx, y = sy;
-    canvas_draw_line(canvas, x,        y + CELL - 1, x + CELL/2, y);
-    canvas_draw_line(canvas, x + CELL/2, y,          x + CELL - 1, y + CELL - 1);
-    canvas_draw_line(canvas, x,        y + CELL - 1, x + CELL - 1, y + CELL - 1);
+    for(int row = 0; row < CELL; row++) {
+        int left = x + row / 2;
+        int right = x + CELL - 1 - row / 2;
+        canvas_draw_line(canvas, left, y + CELL - 1 - row, right, y + CELL - 1 - row);
+    }
 }
 
 static void draw_block(Canvas* canvas, int sx, int sy) {
