@@ -282,6 +282,24 @@ static void get_obstacle_rect(const Obstacle* o,
     }
 }
 
+/* Return collision hitbox for obstacle. Spikes use a smaller, centered
+ * hitbox (half width/height) aligned to ground; other obstacles use
+ * the full rect from get_obstacle_rect. */
+static void get_obstacle_hitbox(const Obstacle* o,
+                               int* ox, int* oy, int* ow, int* oh) {
+    if(o->type == OBS_SPIKE) {
+        int full_x, full_y, full_w, full_h;
+        get_obstacle_rect(o, &full_x, &full_y, &full_w, &full_h);
+        /* half-size hitbox, centered horizontally, bottom-aligned */
+        *ow = full_w / 2;
+        *oh = full_h / 2;
+        *ox = o->x + (full_w - *ow) / 2;
+        *oy = GROUND_Y - *oh;
+    } else {
+        get_obstacle_rect(o, ox, oy, ow, oh);
+    }
+}
+
 /* ─── Game Logic ─────────────────────────────────────────────────── */
 
 static void game_reset(GeoApp* app) {
@@ -353,7 +371,7 @@ static void game_update(GeoApp* app) {
         const Obstacle* o = &app->level.obstacles[i];
 
         int ox, oy, ow, oh;
-        get_obstacle_rect(o, &ox, &oy, &ow, &oh);
+        get_obstacle_hitbox(o, &ox, &oy, &ow, &oh);
         int screen_ox = ox - app->cam_x;
 
         /* shrink hitbox slightly for fairness */
