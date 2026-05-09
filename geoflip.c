@@ -537,8 +537,23 @@ static void render_callback(Canvas* canvas, void* ctx) {
             canvas_draw_str(canvas, 8, 42, LEVEL_DIR);
             canvas_draw_str(canvas, 8, 54, "Add .gdlvl files");
         } else {
+            /* Menu scrolling: keep selected item visible */
+            int item_height = 12;
+            int menu_y_start = 24;
+            int max_visible = 4;  /* max items visible on screen */
+            int scroll_offset = 0;
+            
+            /* Calculate scroll offset to keep selected item visible */
+            if(app->menu_sel > max_visible - 1) {
+                scroll_offset = (app->menu_sel - max_visible + 1) * item_height;
+            }
+            
             for(int i = 0; i < app->level_count; i++) {
-                int y = 24 + i * 12;
+                int y = menu_y_start + i * item_height - scroll_offset;
+                
+                /* Only draw items visible on screen */
+                if(y < 20 || y > SCREEN_H - 2) continue;
+                
                 if(i == app->menu_sel) {
                     canvas_draw_rbox(canvas, 2, y - 9, SCREEN_W - 4, 11, 2);
                     canvas_set_color(canvas, ColorWhite);
@@ -546,7 +561,6 @@ static void render_callback(Canvas* canvas, void* ctx) {
                 canvas_draw_str(canvas, 8, y, app->level_names[i]);
                 canvas_set_color(canvas, ColorBlack);
             }
-            canvas_draw_str(canvas, 2, 62, "OK=Play  Up/Dn=Select");
         }
         return;
     }
