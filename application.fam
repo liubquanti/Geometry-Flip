@@ -1,0 +1,16 @@
+App(
+    appid="geoflip",
+    name="Geometry Flip",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="geoflip",
+    requires=[
+        "gui",
+        "storage",
+        "notification",
+    ],
+    stack_size=2 * 1024,
+    fap_category="Games",
+    fap_version="0.1",
+    fap_description="Geometry Dash clone for Flipper Zero.",
+    fap_author="liubquanti",
+)
