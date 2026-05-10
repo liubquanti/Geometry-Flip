@@ -440,6 +440,179 @@ function serializeLevel(level) {
   return lines.join('\n') + '\n';
 }
 
+let flipperPort = null;
+let flipperWriter = null;
+let flipperReader = null;
+
+async function connectFlipper() {
+  if (flipperPort) return;
+
+  flipperPort = await navigator.serial.requestPort({
+    filters: [
+      { usbVendorId: 0x0483 }
+    ]
+  });
+
+  await flipperPort.open({
+    baudRate: 230400,
+  });
+
+  flipperWriter =
+    flipperPort.writable.getWriter();
+
+  flipperReader =
+    flipperPort.readable.getReader();
+
+  await sleep(1000);
+
+  await flushSerial();
+}
+
+async function disconnectFlipper() {
+  try {
+    if (flipperReader) {
+      await flipperReader.cancel();
+      flipperReader.releaseLock();
+      flipperReader = null;
+    }
+
+    if (flipperWriter) {
+      flipperWriter.releaseLock();
+      flipperWriter = null;
+    }
+
+    if (flipperPort) {
+      await flipperPort.close();
+      flipperPort = null;
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+async function flushSerial() {
+  const start = Date.now();
+
+  while (Date.now() - start < 300) {
+    const result = await Promise.race([
+      flipperReader.read(),
+      sleep(50).then(() => null)
+    ]);
+
+    if (!result) break;
+  }
+}
+
+async function writeSerial(text) {
+  const encoder = new TextEncoder();
+
+  await flipperWriter.write(
+    encoder.encode(text)
+  );
+}
+
+async function readUntilPrompt(timeout = 5000) {
+  const decoder = new TextDecoder();
+
+  let buffer = '';
+
+  const start = Date.now();
+
+  while (Date.now() - start < timeout) {
+    const result = await Promise.race([
+      flipperReader.read(),
+      sleep(100).then(() => null)
+    ]);
+
+    if (!result) continue;
+
+    const { value, done } = result;
+
+    if (done) break;
+
+    if (value) {
+      buffer += decoder.decode(value);
+
+      console.log(buffer);
+
+      // REAL prompt detection
+      if (
+        buffer.includes('\r\n>: ') ||
+        buffer.endsWith('>: ') ||
+        buffer.endsWith('> ')
+      ) {
+        return buffer;
+      }
+    }
+  }
+
+  return buffer;
+}
+
+async function execCLI(command) {
+  await flushSerial();
+
+  console.log('CMD:', command);
+
+  await writeSerial(command + '\r');
+
+  const response =
+    await readUntilPrompt();
+
+  console.log('RESP:', response);
+
+  return response;
+}
+
+function stringToHex(str) {
+  return [...new TextEncoder().encode(str)]
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+async function exportToFlipper() {
+  try {
+    await connectFlipper();
+
+    const fileName = `${state.level.name || 'untitled'}.gdlvl`;
+    const remotePath = `/ext/geoflip/levels/${fileName}`;
+    const content = serializeLevel(state.level);
+
+    await execCLI('storage mkdir /ext/geoflip');
+    await execCLI('storage mkdir /ext/geoflip/levels');
+    await execCLI(`storage remove "${remotePath}"`);
+
+    // Надсилаємо команду write (Flipper чекає дані після неї)
+    await flushSerial();
+    await writeSerial(`storage write "${remotePath}"\r`);
+
+    // Чекаємо поки Flipper надрукує підказку (зазвичай просто чекає введення)
+    await sleep(500);
+    await flushSerial();
+
+    // Надсилаємо вміст файлу, потім EOF (Ctrl+C або спеціальний символ)
+    const encoder = new TextEncoder();
+    await flipperWriter.write(encoder.encode(content));
+
+    // Надсилаємо Ctrl+C щоб завершити запис
+    await flipperWriter.write(new Uint8Array([0x03]));
+
+    await readUntilPrompt(5000);
+
+    alert(`Експортовано:\n${remotePath}`);
+
+  } catch (err) {
+    console.error(err);
+    alert(err.message);
+  } finally {
+    await disconnectFlipper();
+  }
+}
+
 function downloadLevel() {
   const fileNameBase = state.level.name.trim() || 'untitled';
   const fileName = `${fileNameBase.replace(/[^a-z0-9_\- ]/gi, '_')}.gdlvl`;
@@ -527,7 +700,7 @@ el.fileInput.addEventListener('change', () => {
   if (file) loadFromFile(file);
 });
 
-el.saveBtn.addEventListener('click', downloadLevel);
+el.saveBtn.addEventListener('click', exportToFlipper);
 
 el.levelName.addEventListener('input', syncInputsToLevel);
 el.bgStyle.addEventListener('change', syncInputsToLevel);
