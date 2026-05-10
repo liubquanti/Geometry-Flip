@@ -450,10 +450,20 @@ static void game_update(GeoApp* app) {
 /* ─── Rendering ──────────────────────────────────────────────────── */
 
 static void draw_spike(Canvas* canvas, int sx, int sy) {
-    /* 3 lines = full triangle, no per-row loop */
-    canvas_draw_line(canvas, sx,          sy + CELL-1, sx + CELL/2, sy);
-    canvas_draw_line(canvas, sx + CELL/2, sy,          sx + CELL-1, sy + CELL-1);
-    canvas_draw_line(canvas, sx,          sy + CELL-1, sx + CELL-1, sy + CELL-1);
+    /* Filled isosceles triangle (pointing up) with an inner left-side highlight
+       Fill by drawing horizontal scanlines — fast and deterministic on Furi */
+    for(int r = 0; r < CELL; r++) {
+        int half = (CELL - 1 - r) / 2;
+        int x1 = sx + half;
+        int x2 = sx + CELL - 1 - half;
+        canvas_draw_line(canvas, x1, sy + r, x2, sy + r);
+    }
+
+    /* Inner left-side highlight similar to blocks: a thin white slanted line
+       inset from the left edge, running toward the apex */
+    canvas_set_color(canvas, ColorWhite);
+    canvas_draw_line(canvas, sx + 1, sy + CELL - 2, sx + CELL/2, sy + 1);
+    canvas_set_color(canvas, ColorBlack);
 }
 
 static void draw_block(Canvas* canvas, int sx, int sy) {
