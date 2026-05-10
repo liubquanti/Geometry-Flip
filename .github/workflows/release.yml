@@ -59,12 +59,17 @@ jobs:
       - name: Copy application into firmware apps folder
         run: |
           mkdir -p firmware/applications_user/my_app
-          cp -r ./* firmware/applications_user/my_app/
+
+          rsync -av \
+          --exclude firmware \
+          --exclude .git \
+          --exclude .github \
+          ./ firmware/applications_user/my_app/
 
       - name: Build FAP
         run: |
-          cd firmware
-          ./fbt fap_my_app
+            cd firmware
+            ./fbt build APPSRC=applications_user/my_app
 
       - name: Find built FAP
         run: |
