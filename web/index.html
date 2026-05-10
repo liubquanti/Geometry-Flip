@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Geometry Flip Level Editor</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="panel top-panel">
+      <div class="brand-block">
+        <div class="brand">GEOMETRY FLIP</div>
+        <div class="subtitle">LEVEL EDITOR</div>
+      </div>
+
+      <div class="settings-grid">
+        <label class="field">
+          <span>Name</span>
+          <input id="levelName" type="text" maxlength="63" value="Untitled Level" />
+        </label>
+
+        <label class="field narrow">
+          <span>BG</span>
+          <select id="bgStyle">
+            <option value="0">0</option>
+            <option value="1">1</option>
+            <option value="2">2</option>
+          </select>
+        </label>
+
+        <label class="field narrow">
+          <span>Length</span>
+          <input id="levelLength" type="number" min="64" step="8" value="2000" />
+        </label>
+
+        <label class="field wide">
+          <span>View X</span>
+          <input id="cameraX" type="range" min="0" max="4000" step="8" value="0" />
+        </label>
+      </div>
+
+      <div class="actions">
+        <button id="newLevelBtn" type="button">NEW</button>
+        <button id="loadBtn" type="button">LOAD</button>
+        <button id="saveBtn" type="button">EXPORT</button>
+        <input id="fileInput" type="file" accept=".gdlvl,.txt" hidden />
+      </div>
+    </header>
+
+    <main class="workspace">
+      <canvas id="editorCanvas" aria-label="Level editor canvas"></canvas>
+    </main>
+
+    <footer class="panel bottom-panel">
+      <div class="palette-head">
+        <span>BLOCKS</span>
+        <span id="selectionInfo">BLOCK</span>
+      </div>
+      <div id="palette" class="palette"></div>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
