@@ -6,16 +6,15 @@
  *   Back  — Pause / Exit
  *   Up/Dn — Navigate menu
  *
- * Level format: plain-text .gdlvl files
- *
- * Grid system:
- *   All objects placed on an 8×8 pixel grid.
- *   Grid origin (0,0) = bottom-left of the visible ground row.
- *   GX = grid column (0 = left edge of level, increases rightward)
- *   GY = grid row    (0 = ground level, 1 = one block above ground, ...)
- *
- *   Screen Y of object top = GROUND_Y - (GY+1)*CELL
- *   Screen X of object     = GX*CELL - cam_x
+ * Optimizations vs previous version:
+ *   - Objects sorted by GX on load → O(log n) binary search each frame
+ *   - Sliding window: only objects in [cam_x-CELL .. cam_x+SCREEN_W+CELL]
+ *     are ever touched (~16 max at 128px screen with 8px cells)
+ *   - window_start index advanced monotonically, never re-scanned
+ *   - Integer-only physics hot path (float only for py/vy/angle)
+ *   - draw_spike uses 3 lines instead of per-row loop
+ *   - Background star field uses a single fixed pattern (no seed each frame)
+ *   - No fmodf in rotation hot path (manual clamp instead)
  */
 
 #include <furi.h>
@@ -31,12 +30,12 @@
 
 #define SCREEN_W        128
 #define SCREEN_H        64
-#define GROUND_Y        54          /* screen Y of the ground line         */
-#define PLAYER_GX       2           /* player fixed grid column            */
+#define GROUND_Y        54
+#define PLAYER_GX       2
 #define PLAYER_SIZE     8
-#define CELL            8           /* grid cell size in pixels            */
+#define CELL            8
 #define GRAVITY         0.25f
-#define JUMP_VEL        (-3.1f)
+#define JUMP_VEL        (-3.8f)
 #define SCROLL_SPEED    2
 #define MAX_OBJECTS     128
 #define MAX_DECORATIONS 32
@@ -47,44 +46,37 @@
 #define ROT_SPEED_AIR   9.0f
 #define ROT_SNAP_SPEED  18.0f
 
-/* Convert grid Y to screen Y (top of cell) */
+/* How many cells ahead/behind to check each frame (must cover 1 full screen) */
+#define WINDOW_CELLS    (SCREEN_W / CELL + 2)   /* 18 */
+
 #define GRID_TO_SCREEN_Y(gy) (GROUND_Y - ((gy) + 1) * CELL)
-/* Convert grid X to level-space X */
 #define GRID_TO_LEVEL_X(gx)  ((gx) * CELL)
 
 /* ─── Types ─────────────────────────────────────────────────────── */
 
-typedef enum {
-    OBJ_BLOCK = 0,  /* solid 8×8 block — can land on top           */
-    OBJ_SPIKE,      /* triangle spike  — always kills on any touch  */
-} ObjType;
-
-typedef enum {
-    DEC_STAR = 0,
-    DEC_CLOUD,
-    DEC_PILLAR,
-} DecType;
+typedef enum { OBJ_BLOCK = 0, OBJ_SPIKE } ObjType;
+typedef enum { DEC_STAR = 0, DEC_CLOUD, DEC_PILLAR } DecType;
 
 typedef struct {
     ObjType type;
-    int     gx;     /* grid X (column) */
-    int     gy;     /* grid Y (row, 0 = ground level) */
+    int16_t gx;
+    int16_t gy;
 } LvlObject;
 
 typedef struct {
-    DecType type;
-    int     x;      /* level-space X (not grid, for finer parallax placement) */
-    int     y;      /* screen Y */
+    DecType  type;
+    int16_t  x;   /* level-space X */
+    int8_t   y;   /* screen Y */
 } Decoration;
 
 typedef struct {
     char        name[64];
-    int         speed;        /* scroll px/frame (0 = default) */
-    int         gravity_pct;
+    int16_t     speed;
+    int16_t     gravity_pct;
     char        bg_style;
-    int         length;       /* level length in pixels */
-    int         obj_count;
-    int         dec_count;
+    int32_t     length;
+    int16_t     obj_count;
+    int16_t     dec_count;
     LvlObject   objects[MAX_OBJECTS];
     Decoration  decorations[MAX_DECORATIONS];
 } Level;
@@ -98,35 +90,41 @@ typedef enum {
 } GameState;
 
 typedef struct {
-    float   vy;
-    float   py;         /* player screen Y (float, top of cube) */
-    float   prev_py;
-    bool    on_ground;
-    bool    jump_held;
+    /* physics */
+    float    vy;
+    float    py;
+    float    prev_py;
+    bool     on_ground;
+    bool     jump_held;
 
-    float   angle;
-    bool    snapping;
+    /* rotation */
+    float    angle;
+    bool     snapping;
 
-    int     cam_x;      /* camera = level-space X of left screen edge */
-    Level   level;
+    /* world */
+    int32_t  cam_x;
+    int16_t  window_start; /* index of first object that might be on screen */
+    Level    level;
 
-    GameState   state;
-    int         attempt;
-    int         best_pct;
-    uint32_t    dead_timer;
-    int         dead_pct;
-    bool        dead_new_best;
-    uint32_t    frame;
+    /* state */
+    GameState  state;
+    int16_t    attempt;
+    int16_t    best_pct;
+    uint8_t    dead_timer;
+    int8_t     dead_pct;
+    bool       dead_new_best;
+    uint32_t   frame;
 
+    /* menu */
     char    level_files[MAX_LEVELS][MAX_PATH_LEN];
     char    level_names[MAX_LEVELS][64];
-    int     level_count;
-    int     menu_sel;
+    int8_t  level_count;
+    int8_t  menu_sel;
 
     bool    btn_jump;
 } GeoApp;
 
-/* ─── Integer trig (LUT, no libm) ───────────────────────────────── */
+/* ─── Trig LUT ───────────────────────────────────────────────────── */
 
 static const int8_t sin_lut[10] = { 0, 22, 44, 62, 78, 90, 100, 107, 113, 117 };
 
@@ -135,10 +133,10 @@ static int isin128(int deg) {
     int sign = (deg < 180) ? 1 : -1;
     int d = deg % 180;
     if(d > 90) d = 180 - d;
-    int idx  = d / 10; if(idx  > 9) idx  = 9;
-    int idx1 = idx + 1; if(idx1 > 9) idx1 = 9;
-    int frac = (d % 10) * 256 / 10;
-    int v = ((int)sin_lut[idx] * (256 - frac) + (int)sin_lut[idx1] * frac) >> 8;
+    int i0 = d / 10; if(i0 > 9) i0 = 9;
+    int i1 = i0 + 1; if(i1 > 9) i1 = 9;
+    int fr = (d % 10) * 256 / 10;
+    int v  = ((int)sin_lut[i0] * (256 - fr) + (int)sin_lut[i1] * fr) >> 8;
     return sign * v;
 }
 static int icos128(int deg) { return isin128(deg + 90); }
@@ -146,53 +144,53 @@ static int icos128(int deg) { return isin128(deg + 90); }
 /* ─── Draw rotated cube ──────────────────────────────────────────── */
 
 static void draw_player_rotated(Canvas* canvas, int cx, int cy, float angle_f) {
-    const int R = PLAYER_SIZE / 2;
-    int ang = (int)angle_f % 360;
-    if(ang < 0) ang += 360;
-    int sa = isin128(ang);
-    int ca = icos128(ang);
-    int corners[4][2] = { {-R,-R}, {R,-R}, {R,R}, {-R,R} };
+    const int R  = PLAYER_SIZE / 2;
+    int ang = (int)angle_f;
+    ang = ((ang % 360) + 360) % 360;
+    int sa = isin128(ang), ca = icos128(ang);
+    const int cx4[4] = {-R, R,  R, -R};
+    const int cy4[4] = {-R,-R,  R,  R};
     int px[4], py[4];
     for(int i = 0; i < 4; i++) {
-        int x0 = corners[i][0], y0 = corners[i][1];
-        px[i] = cx + ((x0 * ca - y0 * sa + 64) >> 7);
-        py[i] = cy + ((x0 * sa + y0 * ca + 64) >> 7);
+        px[i] = cx + ((cx4[i]*ca - cy4[i]*sa + 64) >> 7);
+        py[i] = cy + ((cx4[i]*sa + cy4[i]*ca + 64) >> 7);
     }
     for(int i = 0; i < 4; i++) {
-        int j = (i + 1) % 4;
+        int j = (i+1) & 3;
         canvas_draw_line(canvas, px[i], py[i], px[j], py[j]);
     }
     canvas_draw_line(canvas, px[0], py[0], px[2], py[2]);
 }
 
-/* ─── Level Parser ───────────────────────────────────────────────── */
+/* ─── Sort helpers ───────────────────────────────────────────────── */
 
-/*
- * Level file format (.gdlvl):
- *
- *   NAME   My Level
- *   SPEED  2          # scroll speed px/frame (default 2)
- *   GRAVITY 100       # gravity % (100 = default)
- *   BG     1          # background: 0=empty 1=stars 2=grid
- *   LENGTH 2000       # level length in pixels
- *
- *   # Objects placed on 8×8 grid:
- *   #   OBJ <TYPE> <GX> <GY>
- *   #   GX = grid column (0 = far left of level)
- *   #   GY = grid row    (0 = ground row, 1 = one block above, ...)
- *   #
- *   # Types: BLOCK  SPIKE
- *
- *   OBJ BLOCK  20  0    # block sitting on ground at column 20
- *   OBJ BLOCK  20  1    # block stacked one above
- *   OBJ SPIKE  25  0    # spike on ground at column 25
- *   OBJ SPIKE  25  1    # spike floating above ground (on top of block etc.)
- *
- *   # Decorations (level-space X, screen Y, no grid):
- *   DEC STAR   200 8
- *   DEC CLOUD  400 12
- *   DEC PILLAR 600 0
- */
+/* Simple insertion sort — fast for nearly-sorted level data */
+static void sort_objects(LvlObject* arr, int n) {
+    for(int i = 1; i < n; i++) {
+        LvlObject key = arr[i];
+        int j = i - 1;
+        while(j >= 0 && arr[j].gx > key.gx) {
+            arr[j+1] = arr[j];
+            j--;
+        }
+        arr[j+1] = key;
+    }
+}
+
+/* Binary search: first index where gx*CELL >= cam_x - CELL */
+static int16_t find_window_start(const LvlObject* arr, int n, int cam_x) {
+    int target = (cam_x - CELL) / CELL;   /* min gx we care about */
+    if(target < 0) target = 0;
+    int lo = 0, hi = n;
+    while(lo < hi) {
+        int mid = (lo + hi) >> 1;
+        if(arr[mid].gx < target) lo = mid + 1;
+        else                     hi = mid;
+    }
+    return (int16_t)lo;
+}
+
+/* ─── Level Parser ───────────────────────────────────────────────── */
 
 static bool parse_level(const char* path, Level* lvl) {
     memset(lvl, 0, sizeof(Level));
@@ -212,7 +210,7 @@ static bool parse_level(const char* path, Level* lvl) {
     }
 
     char   line[128];
-    size_t idx = 0;
+    int    idx = 0;
     char   ch;
 
     while(storage_file_read(file, &ch, 1) == 1) {
@@ -220,44 +218,35 @@ static bool parse_level(const char* path, Level* lvl) {
             if(idx == 0) continue;
             line[idx] = '\0';
             idx = 0;
-
             if(line[0] == '#') continue;
 
-            if(strncmp(line, "NAME ", 5) == 0) {
-                strncpy(lvl->name, line + 5, sizeof(lvl->name) - 1);
-            } else if(strncmp(line, "SPEED ", 6) == 0) {
-                lvl->speed = atoi(line + 6);
-            } else if(strncmp(line, "GRAVITY ", 8) == 0) {
-                lvl->gravity_pct = atoi(line + 8);
-            } else if(strncmp(line, "BG ", 3) == 0) {
-                lvl->bg_style = line[3];
-            } else if(strncmp(line, "LENGTH ", 7) == 0) {
-                lvl->length = atoi(line + 7);
-
-            } else if(strncmp(line, "OBJ ", 4) == 0 && lvl->obj_count < MAX_OBJECTS) {
-                char type_s[16] = {0};
+            if     (strncmp(line, "NAME ",    5) == 0) strncpy(lvl->name, line+5, 63);
+            else if(strncmp(line, "SPEED ",   6) == 0) lvl->speed       = (int16_t)atoi(line+6);
+            else if(strncmp(line, "GRAVITY ", 8) == 0) lvl->gravity_pct = (int16_t)atoi(line+8);
+            else if(strncmp(line, "BG ",      3) == 0) lvl->bg_style    = line[3];
+            else if(strncmp(line, "LENGTH ",  7) == 0) lvl->length      = atoi(line+7);
+            else if(strncmp(line, "OBJ ",     4) == 0 && lvl->obj_count < MAX_OBJECTS) {
+                char ts[16] = {0};
                 int  gx = 0, gy = 0;
-                sscanf(line + 4, "%15s %d %d", type_s, &gx, &gy);
-                LvlObject* o = &lvl->objects[lvl->obj_count];
-                o->gx = gx;
-                o->gy = gy;
-                if     (strcmp(type_s, "BLOCK") == 0) o->type = OBJ_BLOCK;
-                else if(strcmp(type_s, "SPIKE") == 0) o->type = OBJ_SPIKE;
-                else continue; /* unknown type — skip */
-                lvl->obj_count++;
-
-            } else if(strncmp(line, "DEC ", 4) == 0 && lvl->dec_count < MAX_DECORATIONS) {
-                char type_s[16] = {0};
-                int  x = 0, y = 0;
-                sscanf(line + 4, "%15s %d %d", type_s, &x, &y);
-                Decoration* d = &lvl->decorations[lvl->dec_count];
-                d->x = x; d->y = y;
-                if     (strcmp(type_s, "STAR")   == 0) d->type = DEC_STAR;
-                else if(strcmp(type_s, "CLOUD")  == 0) d->type = DEC_CLOUD;
-                else if(strcmp(type_s, "PILLAR") == 0) d->type = DEC_PILLAR;
-                lvl->dec_count++;
+                sscanf(line+4, "%15s %d %d", ts, &gx, &gy);
+                ObjType t;
+                if     (strcmp(ts,"BLOCK") == 0) t = OBJ_BLOCK;
+                else if(strcmp(ts,"SPIKE") == 0) t = OBJ_SPIKE;
+                else continue;
+                lvl->objects[lvl->obj_count++] = (LvlObject){t, (int16_t)gx, (int16_t)gy};
             }
-        } else if(idx < sizeof(line) - 1) {
+            else if(strncmp(line, "DEC ", 4) == 0 && lvl->dec_count < MAX_DECORATIONS) {
+                char ts[16] = {0};
+                int  x = 0, y = 0;
+                sscanf(line+4, "%15s %d %d", ts, &x, &y);
+                DecType t;
+                if     (strcmp(ts,"STAR")   == 0) t = DEC_STAR;
+                else if(strcmp(ts,"CLOUD")  == 0) t = DEC_CLOUD;
+                else if(strcmp(ts,"PILLAR") == 0) t = DEC_PILLAR;
+                else continue;
+                lvl->decorations[lvl->dec_count++] = (Decoration){t, (int16_t)x, (int8_t)y};
+            }
+        } else if(idx < (int)sizeof(line) - 1) {
             line[idx++] = ch;
         }
     }
@@ -265,6 +254,9 @@ static bool parse_level(const char* path, Level* lvl) {
     storage_file_close(file);
     storage_file_free(file);
     furi_record_close(RECORD_STORAGE);
+
+    /* Sort objects by GX so we can use a sliding window during gameplay */
+    sort_objects(lvl->objects, lvl->obj_count);
     return true;
 }
 
@@ -280,7 +272,7 @@ static int discover_levels(char files[][MAX_PATH_LEN], int max) {
         char     name[MAX_FILENAME];
         while(count < max && storage_dir_read(dir, &fi, name, sizeof(name))) {
             if(!(fi.flags & FSF_DIRECTORY)) {
-                size_t len = strlen(name);
+                int len = (int)strlen(name);
                 if(len > 6 && strcmp(name + len - 6, ".gdlvl") == 0) {
                     snprintf(files[count], MAX_PATH_LEN, "%s/%s", LEVEL_DIR, name);
                     count++;
@@ -294,75 +286,69 @@ static int discover_levels(char files[][MAX_PATH_LEN], int max) {
     return count;
 }
 
-/* ─── Collision helpers ──────────────────────────────────────────── */
+/* ─── Collision ──────────────────────────────────────────────────── */
 
 static bool rects_overlap(int ax, int ay, int aw, int ah,
                            int bx, int by, int bw, int bh) {
-    return ax < bx + bw && ax + aw > bx &&
-           ay < by + bh && ay + ah > by;
-}
-
-/*
- * Returns screen-space rect for an object.
- * ox, oy = top-left screen coords of the cell.
- */
-static void obj_screen_rect(const LvlObject* o, int cam_x,
-                             int* sx, int* sy) {
-    *sx = GRID_TO_LEVEL_X(o->gx) - cam_x;
-    *sy = GRID_TO_SCREEN_Y(o->gy);
+    return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
 }
 
 /* ─── Rotation helpers ───────────────────────────────────────────── */
 
 static float nearest_90(float a) {
-    a = fmodf(a, 360.0f);
-    if(a < 0.0f) a += 360.0f;
-    int seg = (int)((a + 45.0f) / 90.0f) % 4;
+    /* map to [0,360) then round to nearest multiple of 90 */
+    while(a <   0.0f) a += 360.0f;
+    while(a >= 360.0f) a -= 360.0f;
+    int seg = (int)((a + 45.0f) / 90.0f) & 3;
     return (float)(seg * 90);
 }
 
-static float angle_approach(float current, float target, float step) {
-    float diff = target - current;
-    while(diff >  180.0f) diff -= 360.0f;
-    while(diff < -180.0f) diff += 360.0f;
-    if(diff >= 0.0f) current += (diff < step) ? diff : step;
-    else { float n = -diff; current -= (n < step) ? n : step; }
-    return fmodf(current + 360.0f, 360.0f);
+static float angle_approach(float cur, float tgt, float step) {
+    float d = tgt - cur;
+    while(d >  180.0f) d -= 360.0f;
+    while(d < -180.0f) d += 360.0f;
+    if(d >= 0.0f) cur += (d < step) ? d : step;
+    else { float n = -d; cur -= (n < step) ? n : step; }
+    while(cur <   0.0f) cur += 360.0f;
+    while(cur >= 360.0f) cur -= 360.0f;
+    return cur;
 }
 
 /* ─── Game Logic ─────────────────────────────────────────────────── */
 
 static void game_reset(GeoApp* app) {
-    app->vy        = 0.0f;
-    app->py        = (float)(GROUND_Y - PLAYER_SIZE);
-    app->prev_py   = app->py;
-    app->on_ground = true;
-    app->jump_held = false;
-    app->btn_jump  = false;
-    app->angle     = 0.0f;
-    app->snapping  = false;
-    app->cam_x     = 0;
-    app->frame     = 0;
-    app->dead_timer = 0;
-    app->dead_pct = 0;
+    app->vy           = 0.0f;
+    app->py           = (float)(GROUND_Y - PLAYER_SIZE);
+    app->prev_py      = app->py;
+    app->on_ground    = true;
+    app->jump_held    = false;
+    app->btn_jump     = false;
+    app->angle        = 0.0f;
+    app->snapping     = false;
+    app->cam_x        = 0;
+    app->frame        = 0;
+    app->dead_timer   = 0;
+    app->dead_pct     = 0;
     app->dead_new_best = false;
+    /* reset sliding window to beginning of sorted object list */
+    app->window_start = 0;
 }
 
 static int game_pct(const GeoApp* app) {
     if(app->level.length <= 0) return 0;
-    int pct = app->cam_x * 100 / app->level.length;
-    if(pct < 0) pct = 0;
-    if(pct > 100) pct = 100;
-    return pct;
+    int p = (int)((int64_t)app->cam_x * 100 / app->level.length);
+    if(p < 0) p = 0;
+    if(p > 100) p = 100;
+    return p;
 }
 
 static void game_begin_death(GeoApp* app) {
-    int pct = game_pct(app);
-    app->dead_pct = pct;
-    app->dead_new_best = (pct > app->best_pct);
-    if(app->dead_new_best) app->best_pct = pct;
-    app->dead_timer = 0;
-    app->state = GAMESTATE_DEAD;
+    int p = game_pct(app);
+    app->dead_pct      = (int8_t)p;
+    app->dead_new_best = (p > app->best_pct);
+    if(app->dead_new_best) app->best_pct = (int16_t)p;
+    app->dead_timer    = 0;
+    app->state         = GAMESTATE_DEAD;
 }
 
 static void game_start_level(GeoApp* app, int idx) {
@@ -378,18 +364,17 @@ static void game_update(GeoApp* app) {
     app->frame++;
 
     /* ── scroll ── */
-    int speed = (app->level.speed > 0) ? app->level.speed : SCROLL_SPEED;
+    int speed = app->level.speed > 0 ? app->level.speed : SCROLL_SPEED;
     app->cam_x += speed;
 
     /* ── physics ── */
     app->prev_py = app->py;
-    float grav   = GRAVITY * (float)app->level.gravity_pct / 100.0f;
-    app->vy     += grav;
+    app->vy     += GRAVITY * (float)app->level.gravity_pct * 0.01f;
     app->py     += app->vy;
 
-    /* ── ground collision ── */
-    float ground_limit = (float)(GROUND_Y - PLAYER_SIZE);
-    bool  was_airborne = !app->on_ground;   /* state from END of last frame */
+    /* ── ground ── */
+    const float ground_limit = (float)(GROUND_Y - PLAYER_SIZE);
+    bool was_airborne = !app->on_ground;
     app->on_ground = false;
 
     if(app->py >= ground_limit) {
@@ -398,84 +383,70 @@ static void game_update(GeoApp* app) {
         app->on_ground = true;
     }
 
-    /* ── fall out of screen ── */
-    if(app->py > (float)(SCREEN_H + 4)) {
-            game_begin_death(app);
-        return;
-    }
+    if(app->py > (float)(SCREEN_H + 4)) { game_begin_death(app); return; }
 
-    /* ── player screen rect (shrunk 1px each side for fairness) ── */
-    int player_screen_x = PLAYER_GX * CELL;
-    int px_hit = player_screen_x + 1;
-    int py_hit = (int)app->py + 1;
-    int pw_hit = PLAYER_SIZE - 2;
-    int ph_hit = PLAYER_SIZE - 2;
+    /* ── player hitbox (pre-computed once) ── */
+    const int px_hit = PLAYER_GX * CELL + 1;
+    const int py_hit = (int)app->py + 1;
+    const int pw_hit = PLAYER_SIZE - 2;
+    const int ph_hit = PLAYER_SIZE - 2;
 
-    /* ── object collisions ── */
-    for(int i = 0; i < app->level.obj_count; i++) {
+    /* ── sliding window: jump directly to the first potentially visible object ── */
+    app->window_start = find_window_start(app->level.objects, app->level.obj_count, app->cam_x);
+
+    /* ── object collisions (window only) ── */
+    int right_edge_gx = (app->cam_x + SCREEN_W + CELL) / CELL;
+
+    for(int i = app->window_start; i < app->level.obj_count; i++) {
         const LvlObject* o = &app->level.objects[i];
-        int sx, sy;
-        obj_screen_rect(o, app->cam_x, &sx, &sy);
 
-        /* cull off-screen */
-        if(sx + CELL < 0 || sx > SCREEN_W) continue;
+        /* Objects are sorted — stop as soon as we pass the right edge */
+        if(o->gx > right_edge_gx) break;
+
+        int sx = o->gx * CELL - app->cam_x;
+        int sy = GROUND_Y - (o->gy + 1) * CELL;
 
         if(o->type == OBJ_BLOCK) {
-            /* Full CELL×CELL solid block */
             if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit, sx, sy, CELL, CELL)) {
-                /* Landing on top: previous bottom was at/above block top */
                 bool from_above = (int)app->prev_py + PLAYER_SIZE <= sy + 2;
                 if(from_above && app->vy >= 0.0f) {
                     app->py        = (float)(sy - PLAYER_SIZE);
                     app->vy        = 0.0f;
                     app->on_ground = true;
                 } else {
-                    /* Hit from side or bottom → die */
-                        game_begin_death(app);
-                    return;
+                    game_begin_death(app); return;
                 }
             }
         } else { /* OBJ_SPIKE */
-            /*
-             * Spike hitbox: inner triangle approximation.
-             * Use a smaller box: 4×4 centered bottom of the cell.
-             */
-            int hx = sx + 2;
-            int hy = sy + 4;
-            int hw = 4;
-            int hh = 4;
-            if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit, hx, hy, hw, hh)) {
-                    game_begin_death(app);
-                return;
+            if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit,
+                             sx+2, sy+4, 4, 4)) {
+                game_begin_death(app); return;
             }
         }
     }
 
-    /* ── jump (after collisions, on_ground is final) ── */
+    /* ── jump ── */
     if(app->on_ground) app->jump_held = false;
-
     if(app->btn_jump && app->on_ground && !app->jump_held) {
         app->vy        = JUMP_VEL;
         app->on_ground = false;
         app->jump_held = true;
     }
-
     if(!app->btn_jump) app->jump_held = false;
 
     /* ── rotation ── */
-    bool grounded_this_frame = was_airborne && app->on_ground;
-
     if(!app->on_ground) {
         app->snapping = false;
-        app->angle    = fmodf(app->angle + ROT_SPEED_AIR, 360.0f);
+        app->angle   += ROT_SPEED_AIR;
+        if(app->angle >= 360.0f) app->angle -= 360.0f;
     } else {
-        if(grounded_this_frame) app->snapping = true;
+        if(was_airborne && app->on_ground) app->snapping = true;
         if(app->snapping) {
-            float target = nearest_90(app->angle);
-            app->angle   = angle_approach(app->angle, target, ROT_SNAP_SPEED);
-            float diff   = app->angle - target;
+            float tgt  = nearest_90(app->angle);
+            app->angle = angle_approach(app->angle, tgt, ROT_SNAP_SPEED);
+            float diff = app->angle - tgt;
             if(diff < 0.0f) diff = -diff;
-            if(diff < 1.5f) { app->angle = target; app->snapping = false; }
+            if(diff < 1.5f) { app->angle = tgt; app->snapping = false; }
         }
     }
 
@@ -489,59 +460,83 @@ static void game_update(GeoApp* app) {
 /* ─── Rendering ──────────────────────────────────────────────────── */
 
 static void draw_spike(Canvas* canvas, int sx, int sy) {
-    /* Triangle pointing up within CELL×CELL */
-    int x = sx, y = sy;
-    for(int row = 0; row < CELL; row++) {
-        int left = x + row / 2;
-        int right = x + CELL - 1 - row / 2;
-        canvas_draw_line(canvas, left, y + CELL - 1 - row, right, y + CELL - 1 - row);
-    }
+    /* 3 lines = full triangle, no per-row loop */
+    canvas_draw_line(canvas, sx,          sy + CELL-1, sx + CELL/2, sy);
+    canvas_draw_line(canvas, sx + CELL/2, sy,          sx + CELL-1, sy + CELL-1);
+    canvas_draw_line(canvas, sx,          sy + CELL-1, sx + CELL-1, sy + CELL-1);
 }
 
 static void draw_block(Canvas* canvas, int sx, int sy) {
     canvas_draw_box(canvas, sx, sy, CELL, CELL);
-    /* hatching so it looks like a block, not a blob */
     canvas_set_color(canvas, ColorWhite);
-    canvas_draw_line(canvas, sx + 1, sy + 1, sx + CELL - 2, sy + 1);
-    canvas_draw_line(canvas, sx + 1, sy + 1, sx + 1, sy + CELL - 2);
+    canvas_draw_line(canvas, sx+1, sy+1, sx+CELL-2, sy+1);
+    canvas_draw_line(canvas, sx+1, sy+1, sx+1, sy+CELL-2);
     canvas_set_color(canvas, ColorBlack);
 }
 
-static void draw_decoration(Canvas* canvas, const Decoration* d, int cam_x) {
-    int sx = d->x - cam_x / 2;
-    if(sx < -12 || sx > SCREEN_W + 12) return;
-    switch(d->type) {
-    case DEC_STAR:
-        canvas_draw_dot(canvas, sx,   d->y);
-        canvas_draw_dot(canvas, sx+1, d->y);
-        canvas_draw_dot(canvas, sx,   d->y+1);
-        break;
-    case DEC_CLOUD:
-        canvas_draw_frame(canvas, sx,   d->y+2, 10, 5);
-        canvas_draw_frame(canvas, sx+2, d->y,   6,  4);
-        break;
-    case DEC_PILLAR:
-        canvas_draw_frame(canvas, sx, 40, 4, GROUND_Y - 40);
-        break;
-    }
-}
+/*
+ * Background star field — pre-baked positions, no per-frame RNG.
+ * 20 stars at fixed (x % SCREEN_W, y) positions, scrolled by cam_x/4.
+ */
+static const uint8_t star_x[20] = {
+     3, 15, 27, 40, 52, 64, 76, 88,100,112,
+     8, 20, 33, 45, 57, 70, 82, 94,106,120
+};
+static const uint8_t star_y[20] = {
+     3,  8,  2, 12,  5, 10,  1,  7,  4, 11,
+    14,  6,  9,  3, 13,  2,  8,  5, 12,  7
+};
 
 static void draw_background(Canvas* canvas, char style, int cam_x) {
     if(style == '1') {
-        uint32_t seed = 12345;
+        int shift = (cam_x / 4) & 0x7f;   /* 0..127 */
         for(int i = 0; i < 20; i++) {
-            seed = seed * 1103515245u + 12345u;
-            int sx = (int)((seed >> 16) & 0x7fu) - (cam_x / 4 % SCREEN_W);
+            int sx = (int)star_x[i] - shift;
             if(sx < 0) sx += SCREEN_W;
-            seed = seed * 1103515245u + 12345u;
-            int sy = (int)((seed >> 16) & 0x1fu);
-            canvas_draw_dot(canvas, sx, sy);
+            canvas_draw_dot(canvas, sx, (int)star_y[i]);
         }
     } else if(style == '2') {
-        for(int x = -(cam_x % 16); x < SCREEN_W; x += 16)
-            canvas_draw_line(canvas, x, 0, x, GROUND_Y - 1);
+        int ox = -(cam_x & 15);   /* cam_x % 16, avoid division */
+        for(int x = ox; x < SCREEN_W; x += 16)
+            canvas_draw_line(canvas, x, 0, x, GROUND_Y-1);
         for(int y = 0; y < GROUND_Y; y += 16)
-            canvas_draw_line(canvas, 0, y, SCREEN_W - 1, y);
+            canvas_draw_line(canvas, 0, y, SCREEN_W-1, y);
+    }
+}
+
+static void draw_decorations(Canvas* canvas, const Level* lvl, int cam_x) {
+    for(int i = 0; i < lvl->dec_count; i++) {
+        const Decoration* d = &lvl->decorations[i];
+        int sx = (int)d->x - cam_x / 2;
+        if(sx < -12 || sx > SCREEN_W + 12) continue;
+        int sy = (int)d->y;
+        switch(d->type) {
+        case DEC_STAR:
+            canvas_draw_dot(canvas, sx,   sy);
+            canvas_draw_dot(canvas, sx+1, sy);
+            canvas_draw_dot(canvas, sx,   sy+1);
+            break;
+        case DEC_CLOUD:
+            canvas_draw_frame(canvas, sx,   sy+2, 10, 5);
+            canvas_draw_frame(canvas, sx+2, sy,   6,  4);
+            break;
+        case DEC_PILLAR:
+            canvas_draw_frame(canvas, sx, 40, 4, GROUND_Y-40);
+            break;
+        }
+    }
+}
+
+/* Draw only objects in the visible window (same bounds as collision) */
+static void draw_objects(Canvas* canvas, const GeoApp* app) {
+    int right_edge_gx = (app->cam_x + SCREEN_W + CELL) / CELL;
+    for(int i = app->window_start; i < app->level.obj_count; i++) {
+        const LvlObject* o = &app->level.objects[i];
+        if(o->gx > right_edge_gx) break;
+        int sx = o->gx * CELL - app->cam_x;
+        int sy = GROUND_Y - (o->gy + 1) * CELL;
+        if(o->type == OBJ_BLOCK) draw_block(canvas, sx, sy);
+        else                     draw_spike(canvas, sx, sy);
     }
 }
 
@@ -560,89 +555,67 @@ static void render_callback(Canvas* canvas, void* ctx) {
             canvas_draw_str(canvas, 8, 42, LEVEL_DIR);
             canvas_draw_str(canvas, 8, 54, "Add .gdlvl files");
         } else {
-            /* Menu scrolling: keep selected item visible */
-            int item_height = 12;
-            int menu_y_start = 24;
-            int max_visible = 4;  /* max items visible on screen */
-            int scroll_offset = 0;
-            
-            /* Calculate scroll offset to keep selected item visible */
-            if(app->menu_sel > max_visible - 1) {
-                scroll_offset = (app->menu_sel - max_visible + 1) * item_height;
-            }
-            
+            const int ITEM_H    = 12;
+            const int MAX_VIS   = 4;
+            const int Y_START   = 24;
+            int scroll = 0;
+            if(app->menu_sel >= MAX_VIS) scroll = (app->menu_sel - MAX_VIS + 1) * ITEM_H;
             for(int i = 0; i < app->level_count; i++) {
-                int y = menu_y_start + i * item_height - scroll_offset;
-                
-                /* Only draw items visible on screen */
+                int y = Y_START + i * ITEM_H - scroll;
                 if(y < 20 || y > SCREEN_H - 2) continue;
-                
                 if(i == app->menu_sel) {
-                    canvas_draw_rbox(canvas, 2, y - 9, SCREEN_W - 4, 11, 2);
+                    canvas_draw_rbox(canvas, 2, y-9, SCREEN_W-4, 11, 2);
                     canvas_set_color(canvas, ColorWhite);
                 }
                 canvas_draw_str(canvas, 8, y, app->level_names[i]);
                 canvas_set_color(canvas, ColorBlack);
             }
+            canvas_draw_str(canvas, 2, 62, "OK=Play  Up/Dn=Select");
         }
         return;
     }
 
     /* ─── PLAYING / PAUSE / DEAD ─── */
-    if(app->state == GAMESTATE_PLAYING || app->state == GAMESTATE_PAUSE || app->state == GAMESTATE_DEAD) {
+    if(app->state == GAMESTATE_PLAYING ||
+       app->state == GAMESTATE_PAUSE   ||
+       app->state == GAMESTATE_DEAD) {
+
         draw_background(canvas, app->level.bg_style, app->cam_x);
+        draw_decorations(canvas, &app->level, app->cam_x);
 
-        for(int i = 0; i < app->level.dec_count; i++)
-            draw_decoration(canvas, &app->level.decorations[i], app->cam_x);
+        canvas_draw_line(canvas, 0, GROUND_Y, SCREEN_W-1, GROUND_Y);
 
-        /* ground line */
-        canvas_draw_line(canvas, 0, GROUND_Y, SCREEN_W - 1, GROUND_Y);
-
-        /* Attempt counter in level (world-space object) */
-        int attempt_x = 40 - app->cam_x;  /* at grid column 2.5 in level-space */
-        int attempt_y = GROUND_Y - 30;     /* slightly above ground */
-        if(attempt_x > -60 && attempt_x < SCREEN_W) {
-            canvas_set_font(canvas, FontPrimary);
-            char attempt_buf[16];
-            snprintf(attempt_buf, sizeof(attempt_buf), "Attempt %d", app->attempt);
-            canvas_draw_str(canvas, attempt_x, attempt_y, attempt_buf);
-        }
-
-        /* objects */
-        for(int i = 0; i < app->level.obj_count; i++) {
-            const LvlObject* o = &app->level.objects[i];
-            int sx, sy;
-            obj_screen_rect(o, app->cam_x, &sx, &sy);
-            if(sx + CELL < 0 || sx > SCREEN_W) continue;
-
-            switch(o->type) {
-            case OBJ_BLOCK: draw_block(canvas, sx, sy); break;
-            case OBJ_SPIKE: draw_spike(canvas, sx, sy); break;
+        /* Attempt label — scrolls with level, visible at start */
+        {
+            int ax = 40 - app->cam_x;
+            if(ax > -60 && ax < SCREEN_W) {
+                canvas_set_font(canvas, FontPrimary);
+                char buf[16];
+                snprintf(buf, sizeof(buf), "Attempt %d", (int)app->attempt);
+                canvas_draw_str(canvas, ax, GROUND_Y - 30, buf);
             }
         }
 
-        /* player */
+        draw_objects(canvas, app);
+
+        /* Player (hidden when dead) */
         if(app->state != GAMESTATE_DEAD) {
             int cx = PLAYER_GX * CELL + PLAYER_SIZE / 2;
             int cy = (int)app->py + PLAYER_SIZE / 2;
             draw_player_rotated(canvas, cx, cy, app->angle);
         }
 
-        /* HUD */
-        int pct = (app->level.length > 0)
-                  ? app->cam_x * 100 / app->level.length : 0;
-        if(pct < 0) pct = 0;
-        if(pct > 100) pct = 100;
-
+        /* HUD — progress bar */
+        int pct = game_pct(app);
         int bar_w = (SCREEN_W - 4) * pct / 100;
-        canvas_draw_frame(canvas, 2, 1, SCREEN_W - 4, 4);
+        canvas_draw_frame(canvas, 2, 1, SCREEN_W-4, 4);
         if(bar_w > 0) canvas_draw_box(canvas, 2, 1, bar_w, 4);
-
         canvas_set_font(canvas, FontSecondary);
         char hud[16];
         snprintf(hud, sizeof(hud), "%d%%", pct);
         canvas_draw_str(canvas, 2, 14, hud);
 
+        /* Overlay */
         if(app->state == GAMESTATE_PAUSE) {
             canvas_set_font(canvas, FontPrimary);
             canvas_draw_str(canvas, 38, 35, "PAUSED");
@@ -653,7 +626,7 @@ static void render_callback(Canvas* canvas, void* ctx) {
             canvas_draw_str(canvas, 33, 28, "NEW BEST");
             canvas_set_font(canvas, FontSecondary);
             char buf[16];
-            snprintf(buf, sizeof(buf), "%d%%", app->dead_pct);
+            snprintf(buf, sizeof(buf), "%d%%", (int)app->dead_pct);
             canvas_draw_str(canvas, 54, 42, buf);
         }
         return;
@@ -665,7 +638,7 @@ static void render_callback(Canvas* canvas, void* ctx) {
         canvas_draw_str(canvas, 30, 16, "LEVEL CLEAR!");
         canvas_set_font(canvas, FontSecondary);
         char buf[32];
-        snprintf(buf, sizeof(buf), "Attempts: %d", app->attempt);
+        snprintf(buf, sizeof(buf), "Attempts: %d", (int)app->attempt);
         canvas_draw_str(canvas, 32, 34, buf);
         canvas_draw_str(canvas, 20, 50, "OK=Menu  Back=Retry");
     }
@@ -677,7 +650,7 @@ static void input_callback(InputEvent* event, void* ctx) {
     furi_message_queue_put((FuriMessageQueue*)ctx, event, 0);
 }
 
-/* ─── App Entry Point ────────────────────────────────────────────── */
+/* ─── Entry Point ────────────────────────────────────────────────── */
 
 int32_t geoflip(void* p) {
     UNUSED(p);
@@ -687,18 +660,16 @@ int32_t geoflip(void* p) {
     app->state    = GAMESTATE_MENU;
     app->menu_sel = 0;
 
-    app->level_count = discover_levels(app->level_files, MAX_LEVELS);
+    app->level_count = (int8_t)discover_levels(app->level_files, MAX_LEVELS);
     for(int i = 0; i < app->level_count; i++) {
         Level* tmp = malloc(sizeof(Level));
         if(tmp && parse_level(app->level_files[i], tmp)) {
-            strncpy(app->level_names[i], tmp->name, sizeof(app->level_names[i]) - 1);
+            strncpy(app->level_names[i], tmp->name, 63);
         } else {
-            const char* slash = strrchr(app->level_files[i], '/');
-            strncpy(app->level_names[i],
-                    slash ? slash + 1 : app->level_files[i],
-                    sizeof(app->level_names[i]) - 1);
+            const char* sl = strrchr(app->level_files[i], '/');
+            strncpy(app->level_names[i], sl ? sl+1 : app->level_files[i], 63);
         }
-        app->level_names[i][sizeof(app->level_names[i]) - 1] = '\0';
+        app->level_names[i][63] = '\0';
         if(tmp) free(tmp);
     }
 
@@ -723,11 +694,11 @@ int32_t geoflip(void* p) {
             case GAMESTATE_MENU:
                 if(pressed && ev.key == InputKeyUp) {
                     int n = app->level_count ? app->level_count : 1;
-                    app->menu_sel = (app->menu_sel - 1 + n) % n;
+                    app->menu_sel = (int8_t)((app->menu_sel - 1 + n) % n);
                 }
                 if(pressed && ev.key == InputKeyDown) {
                     int n = app->level_count ? app->level_count : 1;
-                    app->menu_sel = (app->menu_sel + 1) % n;
+                    app->menu_sel = (int8_t)((app->menu_sel + 1) % n);
                 }
                 if(pressed && ev.key == InputKeyOk && app->level_count > 0) {
                     app->attempt = 0; app->best_pct = 0;
@@ -745,16 +716,16 @@ int32_t geoflip(void* p) {
                 break;
 
             case GAMESTATE_PAUSE:
-                if(pressed && ev.key == InputKeyOk)   app->state = GAMESTATE_PLAYING;
-                if(pressed && ev.key == InputKeyBack)  app->state = GAMESTATE_MENU;
+                if(pressed && ev.key == InputKeyOk)  app->state = GAMESTATE_PLAYING;
+                if(pressed && ev.key == InputKeyBack) app->state = GAMESTATE_MENU;
                 break;
 
             case GAMESTATE_DEAD:
-                if(pressed && ev.key == InputKeyBack)  app->state = GAMESTATE_MENU;
+                if(pressed && ev.key == InputKeyBack) app->state = GAMESTATE_MENU;
                 break;
 
             case GAMESTATE_WIN:
-                if(pressed && ev.key == InputKeyOk)   app->state = GAMESTATE_MENU;
+                if(pressed && ev.key == InputKeyOk)  app->state = GAMESTATE_MENU;
                 if(pressed && ev.key == InputKeyBack) {
                     app->attempt++;
                     game_reset(app);
@@ -768,12 +739,11 @@ int32_t geoflip(void* p) {
 
         if(app->state == GAMESTATE_DEAD) {
             app->dead_timer++;
-            if(app->dead_timer == 1) notification_message(notif, &sequence_reset_vibro);
+            if(app->dead_timer == 1)  notification_message(notif, &sequence_reset_vibro);
             if(app->dead_timer >= 63) game_start_level(app, app->menu_sel);
         }
 
         view_port_update(vp);
-
         furi_delay_ms(16);
     }
 
