@@ -611,7 +611,6 @@ static void render_callback(Canvas* canvas, void* ctx) {
                 canvas_draw_str(canvas, 8, y, app->level_names[i]);
                 canvas_set_color(canvas, ColorBlack);
             }
-            canvas_draw_str(canvas, 2, 62, "OK=Play  Up/Dn=Select");
         }
         return;
     }
