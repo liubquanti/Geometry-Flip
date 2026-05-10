@@ -45,6 +45,7 @@
 #define MAX_PATH_LEN    256
 #define ROT_SPEED_AIR   9.0f
 #define ROT_SNAP_SPEED  18.0f
+#define DEATH_PARTICLES 24
 
 /* How many cells ahead/behind to check each frame (must cover 1 full screen) */
 #define WINDOW_CELLS    (SCREEN_W / CELL + 2)   /* 18 */
@@ -71,6 +72,14 @@ typedef struct {
     int16_t  x;   /* level-space X */
     int8_t   y;   /* screen Y */
 } Decoration;
+
+typedef struct {
+    float x;
+    float y;
+    float vx;
+    float vy;
+    uint8_t life;
+} DeathParticle;
 
 typedef struct {
     char        name[64];
@@ -118,6 +127,8 @@ typedef struct {
     uint8_t    dead_timer;
     int8_t     dead_pct;
     bool       dead_new_best;
+    uint8_t    death_particle_count;
+    DeathParticle death_particles[DEATH_PARTICLES];
     uint32_t   frame;
 
     /* menu */
@@ -328,8 +339,53 @@ static void game_reset(GeoApp* app) {
     app->dead_timer   = 0;
     app->dead_pct     = 0;
     app->dead_new_best = false;
+    app->death_particle_count = 0;
     /* reset sliding window to beginning of sorted object list */
     app->window_start = 0;
+}
+
+static void death_particles_spawn(GeoApp* app) {
+    int cx = PLAYER_GX * CELL + PLAYER_SIZE / 2;
+    int cy = (int)app->py + PLAYER_SIZE / 2;
+
+    if(cy < 0) cy = 0;
+    if(cy > SCREEN_H - 1) cy = SCREEN_H - 1;
+
+    app->death_particle_count = DEATH_PARTICLES;
+    for(uint8_t i = 0; i < DEATH_PARTICLES; i++) {
+        int deg = (int)i * (360 / DEATH_PARTICLES);
+        float speed = 0.7f + (float)(i % 4) * 0.22f;
+        DeathParticle* p = &app->death_particles[i];
+        p->x = (float)cx;
+        p->y = (float)cy;
+        p->vx = ((float)icos128(deg) / 128.0f) * speed;
+        p->vy = ((float)isin128(deg) / 128.0f) * speed - 0.25f;
+        p->life = 32 + (i % 12);
+    }
+}
+
+static void death_particles_update(GeoApp* app) {
+    for(uint8_t i = 0; i < app->death_particle_count; i++) {
+        DeathParticle* p = &app->death_particles[i];
+        if(p->life == 0) continue;
+        p->x += p->vx;
+        p->y += p->vy;
+        p->vy += 0.10f;
+        p->vx *= 0.985f;
+        p->life--;
+    }
+}
+
+static void death_particles_draw(Canvas* canvas, const GeoApp* app) {
+    for(uint8_t i = 0; i < app->death_particle_count; i++) {
+        const DeathParticle* p = &app->death_particles[i];
+        if(p->life == 0) continue;
+        int x = (int)p->x;
+        int y = (int)p->y;
+        if(x < 0 || x >= SCREEN_W || y < 0 || y >= SCREEN_H) continue;
+        canvas_draw_dot(canvas, x, y);
+        if(p->life > 18 && x + 1 < SCREEN_W) canvas_draw_dot(canvas, x + 1, y);
+    }
 }
 
 static int game_pct(const GeoApp* app) {
@@ -346,6 +402,7 @@ static void game_begin_death(GeoApp* app) {
     app->dead_new_best = (p > app->best_pct);
     if(app->dead_new_best) app->best_pct = (int16_t)p;
     app->dead_timer    = 0;
+    death_particles_spawn(app);
     app->state         = GAMESTATE_DEAD;
 }
 
@@ -774,6 +831,8 @@ static void render_callback(Canvas* canvas, void* ctx) {
             int cx = PLAYER_GX * CELL + PLAYER_SIZE / 2;
             int cy = (int)app->py + PLAYER_SIZE / 2;
             draw_player_rotated(canvas, cx, cy, app->angle);
+        } else {
+            death_particles_draw(canvas, app);
         }
 
         /* HUD — progress bar */
@@ -910,6 +969,7 @@ int32_t geoflip(void* p) {
 
         if(app->state == GAMESTATE_DEAD) {
             app->dead_timer++;
+            death_particles_update(app);
             if(app->dead_timer == 1)  notification_message(notif, &sequence_reset_vibro);
             if(app->dead_timer >= 63) game_start_level(app, app->menu_sel);
         }
