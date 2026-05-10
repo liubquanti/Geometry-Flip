@@ -34,10 +34,10 @@
 #define PLAYER_GX       2
 #define PLAYER_SIZE     8
 #define CELL            8
-#define GRAVITY         0.25f
+#define GRAVITY         0.3f
 #define JUMP_VEL        (-3.1f)
 #define SCROLL_SPEED    2
-#define MAX_OBJECTS     128
+#define MAX_OBJECTS     512
 #define MAX_DECORATIONS 32
 #define LEVEL_DIR       "/ext/geoflip/levels"
 #define MAX_LEVELS      16
@@ -729,19 +729,24 @@ static void draw_decorations(Canvas* canvas, const Level* lvl, int cam_x) {
     for(int i = 0; i < lvl->dec_count; i++) {
         const Decoration* d = &lvl->decorations[i];
         int sx = (int)d->x - cam_x / 2;
-        if(sx < -12 || sx > SCREEN_W + 12) continue;
         int sy = (int)d->y;
         switch(d->type) {
         case DEC_STAR:
+            /* skip if any star pixel would be off-screen */
+            if(sx < 0 || sx + 1 >= SCREEN_W || sy < 0 || sy + 1 >= SCREEN_H) continue;
             canvas_draw_dot(canvas, sx,   sy);
             canvas_draw_dot(canvas, sx+1, sy);
             canvas_draw_dot(canvas, sx,   sy+1);
             break;
         case DEC_CLOUD:
+            /* skip if cloud would be partially off-screen */
+            if(sx < 0 || sx + 12 >= SCREEN_W || sy + 2 < 0 || sy + 7 >= SCREEN_H) continue;
             canvas_draw_frame(canvas, sx,   sy+2, 10, 5);
             canvas_draw_frame(canvas, sx+2, sy,   6,  4);
             break;
         case DEC_PILLAR:
+            /* skip if pillar would be partially off-screen */
+            if(sx < 0 || sx + 4 >= SCREEN_W || sy < 0 || sy + (GROUND_Y - 40) >= SCREEN_H) continue;
             canvas_draw_frame(canvas, sx, 40, 4, GROUND_Y-40);
             break;
         }
@@ -756,7 +761,28 @@ static void draw_objects(Canvas* canvas, const GeoApp* app) {
         if(o->gx > right_edge_gx) break;
         int sx = o->gx * CELL - app->cam_x;
         int sy = GROUND_Y - (o->gy + 1) * CELL;
+        /* Compute vertical extents per object type to avoid partial vertical clipping
+           and expensive draw operations when objects are off-screen above/below. */
+        int topY = sy;
+        int bottomY = sy + CELL;
+        if(o->type == OBJ_MINI_SPIKE) {
+            /* mini spike occupies bottom half of cell */
+            topY = sy + (CELL / 2);
+            bottomY = sy + CELL;
+        } else if(o->type == OBJ_MINI_BLOCK) {
+            /* mini block occupies top half of cell */
+            topY = sy;
+            bottomY = sy + (CELL / 2);
+        } else if(o->type == OBJ_JUMPER) {
+            int jumper_h = 2;
+            topY = sy + CELL - jumper_h;
+            bottomY = sy + CELL;
+        }
+
+        /* require full horizontal and vertical containment to draw */
         if(sx < 0 || sx + CELL > SCREEN_W) continue;
+        if(topY < 0 || bottomY > SCREEN_H) continue;
+
         switch(o->type) {
         case OBJ_BLOCK:       draw_block(canvas, sx, sy); break;
         case OBJ_SPIKE:       draw_spike(canvas, sx, sy); break;
@@ -826,11 +852,17 @@ static void render_callback(Canvas* canvas, void* ctx) {
 
         draw_objects(canvas, app);
 
-        /* Player (hidden when dead) */
+        /* Player (hidden when dead). Draw only when fully inside screen to avoid costly partial clipping */
         if(app->state != GAMESTATE_DEAD) {
             int cx = PLAYER_GX * CELL + PLAYER_SIZE / 2;
             int cy = (int)app->py + PLAYER_SIZE / 2;
-            draw_player_rotated(canvas, cx, cy, app->angle);
+            const int R = PLAYER_SIZE / 2;
+            /* Extend buffer by 2px to give cushion at edges before skipping draw */
+            const int buf = 2;
+            if(cx - R - buf >= 0 && cx + R + buf < SCREEN_W && 
+               cy - R - buf >= 0 && cy + R + buf < SCREEN_H) {
+                draw_player_rotated(canvas, cx, cy, app->angle);
+            }
         } else {
             death_particles_draw(canvas, app);
         }
