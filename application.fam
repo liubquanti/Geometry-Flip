@@ -15,4 +15,7 @@ App(
     fap_version="0.1",
     fap_description="Geometry Dash clone for Flipper Zero.",
     fap_author="liubquanti",
+    sources=[
+        "geoflip.c",
+    ],
 )
