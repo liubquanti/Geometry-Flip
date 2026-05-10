@@ -4,6 +4,10 @@
 ![GitHub Repo stars](https://img.shields.io/github/stars/liubquanti/Geometry-Flip?style=for-the-badge&color=yellow) ![GitHub forks](https://img.shields.io/github/forks/liubquanti/Geometry-Flip?style=for-the-badge&color=red) ![GitHub License](https://img.shields.io/github/license/liubquanti/Geometry-Flip?style=for-the-badge)
 
 A crude clone of Geometry Dash for Flipper Zero.
+> [!WARNING]
+> The program has not yet been published, but you can download FAP package from [GitHub Releases](https://github.com/liubquanti/Geometry-Flip/releases).
+>
+> [![Static Badge](https://img.shields.io/badge/Flipper%20Apps-Q?style=for-the-badge&logo=dolphin&logoColor=white&color=ff8200&link=https://lab.flipper.net/apps/geoflip)](https://lab.flipper.net/apps/geoflip)
 
 ## ⭐ • Sources
 
