@@ -35,7 +35,7 @@
 #define PLAYER_SIZE     8
 #define CELL            8
 #define GRAVITY         0.25f
-#define JUMP_VEL        (-3.8f)
+#define JUMP_VEL        (-3.1f)
 #define SCROLL_SPEED    2
 #define MAX_OBJECTS     128
 #define MAX_DECORATIONS 32
@@ -175,19 +175,6 @@ static void sort_objects(LvlObject* arr, int n) {
         }
         arr[j+1] = key;
     }
-}
-
-/* Binary search: first index where gx*CELL >= cam_x - CELL */
-static int16_t find_window_start(const LvlObject* arr, int n, int cam_x) {
-    int target = (cam_x - CELL) / CELL;   /* min gx we care about */
-    if(target < 0) target = 0;
-    int lo = 0, hi = n;
-    while(lo < hi) {
-        int mid = (lo + hi) >> 1;
-        if(arr[mid].gx < target) lo = mid + 1;
-        else                     hi = mid;
-    }
-    return (int16_t)lo;
 }
 
 /* ─── Level Parser ───────────────────────────────────────────────── */
@@ -391,8 +378,11 @@ static void game_update(GeoApp* app) {
     const int pw_hit = PLAYER_SIZE - 2;
     const int ph_hit = PLAYER_SIZE - 2;
 
-    /* ── sliding window: jump directly to the first potentially visible object ── */
-    app->window_start = find_window_start(app->level.objects, app->level.obj_count, app->cam_x);
+        /* ── sliding window: advance only when objects fully leave the left edge ── */
+        while(app->window_start < app->level.obj_count &&
+                ((int)app->level.objects[app->window_start].gx * CELL + CELL) <= app->cam_x) {
+                app->window_start++;
+        }
 
     /* ── object collisions (window only) ── */
     int right_edge_gx = (app->cam_x + SCREEN_W + CELL) / CELL;
@@ -535,6 +525,7 @@ static void draw_objects(Canvas* canvas, const GeoApp* app) {
         if(o->gx > right_edge_gx) break;
         int sx = o->gx * CELL - app->cam_x;
         int sy = GROUND_Y - (o->gy + 1) * CELL;
+        if(sx < 0 || sx + CELL > SCREEN_W) continue;
         if(o->type == OBJ_BLOCK) draw_block(canvas, sx, sy);
         else                     draw_spike(canvas, sx, sy);
     }
