@@ -1,0 +1,96 @@
+name: Build and Release Flipper Zero FAP
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  check-fap-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version_changed: ${{ steps.check.outputs.version_changed }}
+      new_version: ${{ steps.check.outputs.new_version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get previous application.fam
+        run: |
+          git fetch origin main --depth=2
+          git show HEAD^:application.fam > application_old.fam || echo "" > application_old.fam
+
+      - name: Check if fap_version changed
+        id: check
+        shell: bash
+        run: |
+          old_version=$(grep 'fap_version=' application_old.fam | sed 's/.*"\(.*\)".*/\1/')
+          new_version=$(grep 'fap_version=' application.fam | sed 's/.*"\(.*\)".*/\1/')
+
+          echo "Old FAP version: $old_version"
+          echo "New FAP version: $new_version"
+
+          if [ "$old_version" != "$new_version" ] && [ -n "$new_version" ]; then
+            echo "version_changed=true" >> $GITHUB_OUTPUT
+            echo "new_version=$new_version" >> $GITHUB_OUTPUT
+          else
+            echo "version_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+  build-and-release:
+    needs: check-fap-version
+    if: needs.check-fap-version.outputs.version_changed == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Clone Flipper Zero firmware
+        run: |
+          git clone --recursive https://github.com/flipperdevices/flipperzero-firmware.git firmware
+
+      - name: Copy application into firmware apps folder
+        run: |
+          mkdir -p firmware/applications_user/my_app
+          cp -r ./* firmware/applications_user/my_app/
+
+      - name: Build FAP
+        run: |
+          cd firmware
+          ./fbt fap_my_app
+
+      - name: Find built FAP
+        run: |
+          find firmware/build -name "*.fap"
+
+      - name: Rename FAP artifact
+        shell: bash
+        run: |
+          fap_file=$(find firmware/build -name "*.fap" | head -n 1)
+          cp "$fap_file" release.fap
+
+      - name: Extract tag version
+        id: extract_tag
+        shell: bash
+        run: |
+          full_version="${{ needs.check-fap-version.outputs.new_version }}"
+          echo "tag_version=$full_version" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.extract_tag.outputs.tag_version }}
+          name: "v${{ steps.extract_tag.outputs.tag_version }}"
+          body: |
+            Release of version v${{ steps.extract_tag.outputs.tag_version }} for ${{ github.repository }}.
+          files: release.fap
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
