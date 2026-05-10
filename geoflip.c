@@ -100,6 +100,8 @@ typedef struct {
     /* rotation */
     float    angle;
     bool     snapping;
+    bool     landed_on_block;
+    int8_t   lock_angle; /* frames to keep angle locked after landing */
 
     /* world */
     int32_t  cam_x;
@@ -312,6 +314,8 @@ static void game_reset(GeoApp* app) {
     app->btn_jump     = false;
     app->angle        = 0.0f;
     app->snapping     = false;
+    app->landed_on_block = false;
+    app->lock_angle    = 0;
     app->cam_x        = 0;
     app->frame        = 0;
     app->dead_timer   = 0;
@@ -350,6 +354,10 @@ static void game_update(GeoApp* app) {
 
     app->frame++;
 
+    /* reset per-frame landing flag */
+    app->landed_on_block = false;
+    if(app->lock_angle > 0) app->lock_angle--;
+
     /* ── scroll ── */
     int speed = app->level.speed > 0 ? app->level.speed : SCROLL_SPEED;
     app->cam_x += speed;
@@ -376,7 +384,7 @@ static void game_update(GeoApp* app) {
     const int px_hit = PLAYER_GX * CELL + 1;
     const int py_hit = (int)app->py + 1;
     const int pw_hit = PLAYER_SIZE - 2;
-    const int ph_hit = PLAYER_SIZE - 2;
+    const int ph_hit = PLAYER_SIZE - 1;  /* slightly taller for better block adhesion */
 
         /* ── sliding window: advance only when objects fully leave the left edge ── */
         while(app->window_start < app->level.obj_count &&
@@ -397,12 +405,38 @@ static void game_update(GeoApp* app) {
         int sy = GROUND_Y - (o->gy + 1) * CELL;
 
         if(o->type == OBJ_BLOCK) {
+            /* Explicit stick-to-block logic: if player is very close to block top,
+               snap them onto it (helps with seamless multi-block traversal) */
+            int player_bottom = (int)app->py + PLAYER_SIZE;
+            int block_top     = sy;
+            if(!app->on_ground && app->vy >= 0.0f && 
+               player_bottom > block_top - 2 && player_bottom < block_top + 4 &&
+               px_hit + pw_hit > sx && px_hit < sx + CELL) {
+                app->py        = (float)(sy - PLAYER_SIZE);
+                app->vy        = 0.0f;
+                app->on_ground = true;
+                app->angle     = nearest_90(app->angle);
+                app->snapping  = false;
+                app->landed_on_block = true;
+                app->lock_angle = 6;
+                continue;  /* skip normal collision for this block */
+            }
+
             if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit, sx, sy, CELL, CELL)) {
                 bool from_above = (int)app->prev_py + PLAYER_SIZE <= sy + 2;
-                if(from_above && app->vy >= 0.0f) {
+                /* allow a slightly larger tolerance for landing detection */
+                bool tolerant_above = (int)app->prev_py + PLAYER_SIZE <= sy + 4;
+                if((from_above || tolerant_above) && app->vy >= 0.0f) {
                     app->py        = (float)(sy - PLAYER_SIZE);
                     app->vy        = 0.0f;
                     app->on_ground = true;
+                    /* Immediately lock angle to nearest 90° for block landings
+                       and mark landed_on_block so rotation logic knows to avoid
+                       playing the snapping animation this frame. */
+                    app->angle     = nearest_90(app->angle);
+                    app->snapping  = false;
+                    app->landed_on_block = true;
+                    app->lock_angle = 6; /* keep angle locked for a few frames */
                 } else {
                     game_begin_death(app); return;
                 }
@@ -421,22 +455,28 @@ static void game_update(GeoApp* app) {
         app->vy        = JUMP_VEL;
         app->on_ground = false;
         app->jump_held = true;
+        app->lock_angle = 0;  /* Allow rotation immediately on jump */
     }
     if(!app->btn_jump) app->jump_held = false;
 
     /* ── rotation ── */
     if(!app->on_ground) {
         app->snapping = false;
-        app->angle   += ROT_SPEED_AIR;
-        if(app->angle >= 360.0f) app->angle -= 360.0f;
+        if(app->lock_angle <= 0) {
+            app->angle   += ROT_SPEED_AIR;
+            if(app->angle >= 360.0f) app->angle -= 360.0f;
+        }
     } else {
-        if(was_airborne && app->on_ground) app->snapping = true;
+        if(was_airborne && app->on_ground && !app->landed_on_block) app->snapping = true;
         if(app->snapping) {
             float tgt  = nearest_90(app->angle);
             app->angle = angle_approach(app->angle, tgt, ROT_SNAP_SPEED);
             float diff = app->angle - tgt;
             if(diff < 0.0f) diff = -diff;
             if(diff < 1.5f) { app->angle = tgt; app->snapping = false; }
+        } else {
+            /* Not snapping and on ground — lock to exact 90-degree orientation */
+            app->angle = nearest_90(app->angle);
         }
     }
 
