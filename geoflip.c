@@ -54,7 +54,10 @@
 
 /* ─── Types ─────────────────────────────────────────────────────── */
 
-typedef enum { OBJ_BLOCK = 0, OBJ_SPIKE } ObjType;
+typedef enum { 
+    OBJ_BLOCK = 0, OBJ_SPIKE, OBJ_MINI_SPIKE, OBJ_MINI_BLOCK,
+    OBJ_JUMPER, OBJ_SPHERE 
+} ObjType;
 typedef enum { DEC_STAR = 0, DEC_CLOUD, DEC_PILLAR } DecType;
 
 typedef struct {
@@ -219,8 +222,12 @@ static bool parse_level(const char* path, Level* lvl) {
                 int  gx = 0, gy = 0;
                 sscanf(line+4, "%15s %d %d", ts, &gx, &gy);
                 ObjType t;
-                if     (strcmp(ts,"BLOCK") == 0) t = OBJ_BLOCK;
-                else if(strcmp(ts,"SPIKE") == 0) t = OBJ_SPIKE;
+                if     (strcmp(ts,"BLOCK") == 0)      t = OBJ_BLOCK;
+                else if(strcmp(ts,"SPIKE") == 0)      t = OBJ_SPIKE;
+                else if(strcmp(ts,"MINI_SPIKE") == 0) t = OBJ_MINI_SPIKE;
+                else if(strcmp(ts,"MINI_BLOCK") == 0) t = OBJ_MINI_BLOCK;
+                else if(strcmp(ts,"JUMPER") == 0)     t = OBJ_JUMPER;
+                else if(strcmp(ts,"SPHERE") == 0)     t = OBJ_SPHERE;
                 else continue;
                 lvl->objects[lvl->obj_count++] = (LvlObject){t, (int16_t)gx, (int16_t)gy};
             }
@@ -441,10 +448,80 @@ static void game_update(GeoApp* app) {
                     game_begin_death(app); return;
                 }
             }
-        } else { /* OBJ_SPIKE */
+        } else if(o->type == OBJ_SPIKE) {
             if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit,
                              sx+2, sy+4, 4, 4)) {
                 game_begin_death(app); return;
+            }
+        } else if(o->type == OBJ_MINI_SPIKE) {
+            /* Mini spike: full width, half height (bottom half of cell) */
+            int msh = CELL / 2;
+            if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit,
+                             sx, sy + msh, CELL, msh)) {
+                game_begin_death(app); return;
+            }
+        } else if(o->type == OBJ_MINI_BLOCK) {
+            /* Mini block: 4px tall, can land on top like regular block */
+            int mbh = CELL / 2;
+            int player_bottom = (int)app->py + PLAYER_SIZE;
+            int block_top     = sy;
+            if(!app->on_ground && app->vy >= 0.0f && 
+               player_bottom > block_top - 2 && player_bottom < block_top + 4 &&
+               px_hit + pw_hit > sx && px_hit < sx + CELL) {
+                app->py        = (float)(sy - PLAYER_SIZE);
+                app->vy        = 0.0f;
+                app->on_ground = true;
+                app->angle     = nearest_90(app->angle);
+                app->snapping  = false;
+                app->landed_on_block = true;
+                app->lock_angle = 6;
+                continue;
+            }
+            if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit, sx, sy, CELL, mbh)) {
+                bool from_above = (int)app->prev_py + PLAYER_SIZE <= sy + 2;
+                bool tolerant_above = (int)app->prev_py + PLAYER_SIZE <= sy + 4;
+                if((from_above || tolerant_above) && app->vy >= 0.0f) {
+                    app->py        = (float)(sy - PLAYER_SIZE);
+                    app->vy        = 0.0f;
+                    app->on_ground = true;
+                    app->angle     = nearest_90(app->angle);
+                    app->snapping  = false;
+                    app->landed_on_block = true;
+                    app->lock_angle = 6;
+                } else {
+                    game_begin_death(app); return;
+                }
+            }
+        } else if(o->type == OBJ_JUMPER) {
+            /* Jumper pad: 2px tall at bottom, triggers auto-jump on any contact.
+               Never causes death. */
+            int jumper_h = 2;
+            int jumper_y = sy + CELL - jumper_h;
+            
+            if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit, sx, jumper_y, CELL, jumper_h)) {
+                /* Contact with jumper from any side → auto-jump */
+                if(app->vy >= 0.0f) {
+                    /* Coming from above or level */
+                    app->py = (float)(sy - PLAYER_SIZE);
+                }
+                app->vy = JUMP_VEL;  /* Auto-jump */
+                app->on_ground = false;
+                app->angle = nearest_90(app->angle);
+                app->snapping = false;
+                app->lock_angle = 0;
+            }
+        } else if(o->type == OBJ_SPHERE) {
+            /* Sphere: manual jump pad, only triggers when inside hitbox and jump pressed.
+               Never causes death - safe to touch. */
+            int sphere_hitbox = CELL;
+            if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit, sx, sy, sphere_hitbox, sphere_hitbox)) {
+                if(app->btn_jump && !app->jump_held) {
+                    /* Player pressed jump while on/in sphere */
+                    app->vy        = JUMP_VEL;
+                    app->on_ground = false;
+                    app->jump_held = true;
+                    app->lock_angle = 0;
+                }
             }
         }
     }
@@ -514,6 +591,53 @@ static void draw_block(Canvas* canvas, int sx, int sy) {
     canvas_set_color(canvas, ColorBlack);
 }
 
+static void draw_mini_spike(Canvas* canvas, int sx, int sy) {
+    /* Mini spike: half height (4px), full width, same style as regular spike
+       Triangle pointing up from bottom half of cell */
+    int h = CELL / 2;
+    int y_offset = sy + h;  /* Start from middle of cell */
+    for(int r = 0; r < h; r++) {
+        int half = (h - 1 - r) / 2;
+        int x1 = sx + half;
+        int x2 = sx + CELL - 1 - half;
+        canvas_draw_line(canvas, x1, y_offset + r, x2, y_offset + r);
+    }
+    canvas_set_color(canvas, ColorWhite);
+    canvas_draw_line(canvas, sx + 1, y_offset + h - 2, sx + CELL/2, y_offset + 1);
+    canvas_set_color(canvas, ColorBlack);
+}
+
+static void draw_mini_block(Canvas* canvas, int sx, int sy) {
+    /* Mini block: 4px tall, 8px wide, filled with highlight */
+    int h = CELL / 2;
+    canvas_draw_box(canvas, sx, sy, CELL, h);
+    canvas_set_color(canvas, ColorWhite);
+    canvas_draw_line(canvas, sx+1, sy+1, sx+CELL-2, sy+1);
+    canvas_set_color(canvas, ColorBlack);
+}
+
+static void draw_jumper(Canvas* canvas, int sx, int sy) {
+    /* Jumper pad: thin pad at bottom (2px) with cross-hatch pattern */
+    int h = 2;
+    int y_pad = sy + CELL - h;
+    canvas_draw_box(canvas, sx, y_pad, CELL, h);
+    canvas_set_color(canvas, ColorWhite);
+    for(int i = 0; i < CELL; i += 2) {
+        canvas_draw_dot(canvas, sx + i, y_pad);
+    }
+    canvas_set_color(canvas, ColorBlack);
+}
+
+static void draw_sphere(Canvas* canvas, int sx, int sy) {
+    /* Sphere: circular pad, drawn as a circle outline */
+    int cx = sx + CELL / 2;
+    int cy = sy + CELL / 2;
+    int r = CELL / 2 - 1;
+    /* Draw approximation of circle using canvas */
+    canvas_draw_circle(canvas, cx, cy, r);
+}
+
+
 /*
  * Background star field — pre-baked positions, no per-frame RNG.
  * 20 stars at fixed (x % SCREEN_W, y) positions, scrolled by cam_x/4.
@@ -576,8 +700,15 @@ static void draw_objects(Canvas* canvas, const GeoApp* app) {
         int sx = o->gx * CELL - app->cam_x;
         int sy = GROUND_Y - (o->gy + 1) * CELL;
         if(sx < 0 || sx + CELL > SCREEN_W) continue;
-        if(o->type == OBJ_BLOCK) draw_block(canvas, sx, sy);
-        else                     draw_spike(canvas, sx, sy);
+        switch(o->type) {
+        case OBJ_BLOCK:       draw_block(canvas, sx, sy); break;
+        case OBJ_SPIKE:       draw_spike(canvas, sx, sy); break;
+        case OBJ_MINI_SPIKE:  draw_mini_spike(canvas, sx, sy); break;
+        case OBJ_MINI_BLOCK:  draw_mini_block(canvas, sx, sy); break;
+        case OBJ_JUMPER:      draw_jumper(canvas, sx, sy); break;
+        case OBJ_SPHERE:      draw_sphere(canvas, sx, sy); break;
+        default: break;
+        }
     }
 }
 
@@ -784,7 +915,7 @@ int32_t geoflip(void* p) {
         }
 
         view_port_update(vp);
-        furi_delay_ms(16);
+        furi_delay_ms(16); /* must be 16 */
     }
 
     gui_remove_view_port(gui, vp);
