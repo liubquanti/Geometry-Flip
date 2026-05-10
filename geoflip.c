@@ -26,6 +26,8 @@
 #include <string.h>
 #include <math.h>
 
+#include "levels.h"
+
 /* ─── Constants ─────────────────────────────────────────────────── */
 
 #define SCREEN_W        128
@@ -95,6 +97,8 @@ typedef struct {
 
 typedef enum {
     GAMESTATE_MENU = 0,
+    GAMESTATE_MAINMENU,
+    GAMESTATE_OFFICIALS,
     GAMESTATE_PLAYING,
     GAMESTATE_DEAD,
     GAMESTATE_WIN,
@@ -130,12 +134,18 @@ typedef struct {
     uint8_t    death_particle_count;
     DeathParticle death_particles[DEATH_PARTICLES];
     uint32_t   frame;
+    int32_t    menu_cam_x;
 
     /* menu */
     char    level_files[MAX_LEVELS][MAX_PATH_LEN];
     char    level_names[MAX_LEVELS][64];
-    int8_t  level_count;
+    int8_t  level_count; /* custom levels from /ext/geoflip/levels */
     int8_t  menu_sel;
+    int8_t  custom_sel;
+    int8_t  official_sel;
+
+    bool    current_is_official;
+    int8_t  current_level_idx;
 
     bool    btn_jump;
 } GeoApp;
@@ -263,6 +273,64 @@ static bool parse_level(const char* path, Level* lvl) {
     furi_record_close(RECORD_STORAGE);
 
     /* Sort objects by GX so we can use a sliding window during gameplay */
+    sort_objects(lvl->objects, lvl->obj_count);
+    return true;
+}
+
+static bool parse_level_from_text(const char* text, Level* lvl) {
+    memset(lvl, 0, sizeof(Level));
+    lvl->speed       = SCROLL_SPEED;
+    lvl->gravity_pct = 100;
+    lvl->bg_style    = '0';
+    lvl->length      = 2000;
+    strncpy(lvl->name, "Unnamed", sizeof(lvl->name) - 1);
+
+    char line[128];
+    int idx = 0;
+    for(const char* p = text; ; p++) {
+        char ch = *p;
+        if(ch == '\n' || ch == '\r' || ch == '\0') {
+            if(idx > 0) {
+                line[idx] = '\0';
+                idx = 0;
+                if(line[0] != '#') {
+                    if(strncmp(line, "NAME ", 5) == 0) strncpy(lvl->name, line + 5, 63);
+                    else if(strncmp(line, "SPEED ", 6) == 0) lvl->speed = (int16_t)atoi(line + 6);
+                    else if(strncmp(line, "GRAVITY ", 8) == 0) lvl->gravity_pct = (int16_t)atoi(line + 8);
+                    else if(strncmp(line, "BG ", 3) == 0) lvl->bg_style = line[3];
+                    else if(strncmp(line, "LENGTH ", 7) == 0) lvl->length = atoi(line + 7);
+                    else if(strncmp(line, "OBJ ", 4) == 0 && lvl->obj_count < MAX_OBJECTS) {
+                        char ts[16] = {0};
+                        int gx = 0, gy = 0;
+                        sscanf(line + 4, "%15s %d %d", ts, &gx, &gy);
+                        ObjType t;
+                        if(strcmp(ts, "BLOCK") == 0) t = OBJ_BLOCK;
+                        else if(strcmp(ts, "SPIKE") == 0) t = OBJ_SPIKE;
+                        else if(strcmp(ts, "MINI_SPIKE") == 0) t = OBJ_MINI_SPIKE;
+                        else if(strcmp(ts, "MINI_BLOCK") == 0) t = OBJ_MINI_BLOCK;
+                        else if(strcmp(ts, "JUMPER") == 0) t = OBJ_JUMPER;
+                        else if(strcmp(ts, "SPHERE") == 0) t = OBJ_SPHERE;
+                        else continue;
+                        lvl->objects[lvl->obj_count++] = (LvlObject){t, (int16_t)gx, (int16_t)gy};
+                    } else if(strncmp(line, "DEC ", 4) == 0 && lvl->dec_count < MAX_DECORATIONS) {
+                        char ts[16] = {0};
+                        int x = 0, y = 0;
+                        sscanf(line + 4, "%15s %d %d", ts, &x, &y);
+                        DecType t;
+                        if(strcmp(ts, "STAR") == 0) t = DEC_STAR;
+                        else if(strcmp(ts, "CLOUD") == 0) t = DEC_CLOUD;
+                        else if(strcmp(ts, "PILLAR") == 0) t = DEC_PILLAR;
+                        else continue;
+                        lvl->decorations[lvl->dec_count++] = (Decoration){t, (int16_t)x, (int8_t)y};
+                    }
+                }
+            }
+            if(ch == '\0') break;
+        } else if(idx < (int)sizeof(line) - 1) {
+            line[idx++] = ch;
+        }
+    }
+
     sort_objects(lvl->objects, lvl->obj_count);
     return true;
 }
@@ -407,10 +475,28 @@ static void game_begin_death(GeoApp* app) {
 }
 
 static void game_start_level(GeoApp* app, int idx) {
+    if(idx < 0 || idx >= app->level_count) return;
     if(!parse_level(app->level_files[idx], &app->level)) return;
+    app->current_is_official = false;
+    app->current_level_idx = (int8_t)idx;
     app->attempt++;
     game_reset(app);
     app->state = GAMESTATE_PLAYING;
+}
+
+static void game_start_official_level(GeoApp* app, int idx) {
+    if(idx < 0 || idx >= OFFICIAL_LEVEL_COUNT) return;
+    if(!parse_level_from_text(OFFICIAL_LEVELS[idx].data, &app->level)) return;
+    app->current_is_official = true;
+    app->current_level_idx = (int8_t)idx;
+    app->attempt++;
+    game_reset(app);
+    app->state = GAMESTATE_PLAYING;
+}
+
+static void game_restart_current_level(GeoApp* app) {
+    if(app->current_is_official) game_start_official_level(app, app->current_level_idx);
+    else game_start_level(app, app->current_level_idx);
 }
 
 static void game_update(GeoApp* app) {
@@ -704,8 +790,8 @@ static const uint8_t star_x[20] = {
      8, 20, 33, 45, 57, 70, 82, 94,106,120
 };
 static const uint8_t star_y[20] = {
-     3,  8,  2, 12,  5, 10,  1,  7,  4, 11,
-    14,  6,  9,  3, 13,  2,  8,  5, 12,  7
+     5, 18, 10, 28, 15, 35,  3, 22,  8, 40,
+    12, 50, 20,  7, 55, 25, 58, 14, 60, 45
 };
 
 static void draw_background(Canvas* canvas, char style, int cam_x) {
@@ -714,7 +800,12 @@ static void draw_background(Canvas* canvas, char style, int cam_x) {
         for(int i = 0; i < 20; i++) {
             int sx = (int)star_x[i] - shift;
             if(sx < 0) sx += SCREEN_W;
-            canvas_draw_dot(canvas, sx, (int)star_y[i]);
+            int sy = (int)star_y[i];
+            /* 2px star (2x2 block) */
+            canvas_draw_dot(canvas, sx, sy);
+            canvas_draw_dot(canvas, sx + 1, sy);
+            canvas_draw_dot(canvas, sx, sy + 1);
+            canvas_draw_dot(canvas, sx + 1, sy + 1);
         }
     } else if(style == '2') {
         int ox = -(cam_x & 15);   /* cam_x % 16, avoid division */
@@ -803,10 +894,10 @@ static void render_callback(Canvas* canvas, void* ctx) {
     /* ─── MENU ─── */
     if(app->state == GAMESTATE_MENU) {
         canvas_set_font(canvas, FontPrimary);
-        canvas_draw_str(canvas, 20, 12, "GEOMETRY FLIP");
+        canvas_draw_str(canvas, 18, 12, "CUSTOM LEVELS");
         canvas_set_font(canvas, FontSecondary);
         if(app->level_count == 0) {
-            canvas_draw_str(canvas, 8, 30, "No levels found!");
+            canvas_draw_str(canvas, 8, 30, "No custom levels!");
             canvas_draw_str(canvas, 8, 42, LEVEL_DIR);
             canvas_draw_str(canvas, 8, 54, "Add .gdlvl files");
         } else {
@@ -814,11 +905,11 @@ static void render_callback(Canvas* canvas, void* ctx) {
             const int MAX_VIS   = 4;
             const int Y_START   = 24;
             int scroll = 0;
-            if(app->menu_sel >= MAX_VIS) scroll = (app->menu_sel - MAX_VIS + 1) * ITEM_H;
+            if(app->custom_sel >= MAX_VIS) scroll = (app->custom_sel - MAX_VIS + 1) * ITEM_H;
             for(int i = 0; i < app->level_count; i++) {
                 int y = Y_START + i * ITEM_H - scroll;
                 if(y < 20 || y > SCREEN_H - 2) continue;
-                if(i == app->menu_sel) {
+                if(i == app->custom_sel) {
                     canvas_draw_rbox(canvas, 2, y-9, SCREEN_W-4, 11, 2);
                     canvas_set_color(canvas, ColorWhite);
                 }
@@ -836,6 +927,11 @@ static void render_callback(Canvas* canvas, void* ctx) {
 
         draw_background(canvas, app->level.bg_style, app->cam_x);
         draw_decorations(canvas, &app->level, app->cam_x);
+
+        /* Ground fill (white) */
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_box(canvas, 0, GROUND_Y, SCREEN_W, SCREEN_H - GROUND_Y);
+        canvas_set_color(canvas, ColorBlack);
 
         canvas_draw_line(canvas, 0, GROUND_Y, SCREEN_W-1, GROUND_Y);
 
@@ -910,6 +1006,88 @@ static void render_callback(Canvas* canvas, void* ctx) {
         return;
     }
 
+    /* ─── MAIN MENU (three-button) ─── */
+    if(app->state == GAMESTATE_MAINMENU) {
+        draw_background(canvas, '1', app->menu_cam_x);
+        /* layout: big play in center, small cube left, list right */
+        const int cx = SCREEN_W/2;
+        const int cy = SCREEN_H/2;
+        /* draw background title */
+        canvas_set_font(canvas, FontPrimary);
+        canvas_draw_str(canvas, 21, 8, "GEOMETRY FLIP");
+
+        /* left small cube button */
+        int lx = cx - 52;
+        int ly = cy - 12;
+        canvas_set_color(canvas, ColorBlack);
+        canvas_draw_rbox(canvas, lx, ly, 24, 24, 3);
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_rbox(canvas, lx + 2, ly + 2, 20, 20, 2);
+        canvas_set_color(canvas, ColorBlack);
+        /* cube icon, 2px thickness */
+        canvas_draw_frame(canvas, lx + 6, ly + 6, 12, 12);
+        canvas_draw_frame(canvas, lx + 7, ly + 7, 10, 10);
+
+        /* center play button (large) */
+        int px = cx - 20;
+        int py = cy - 20;
+        canvas_set_color(canvas, ColorBlack);
+        canvas_draw_rbox(canvas, px, py, 40, 40, 3);
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_rbox(canvas, px + 2, py + 2, 36, 36, 2);
+        canvas_set_color(canvas, ColorBlack);
+        /* triangle, 2px thickness */
+        int tx = px + 12, ty = py + 9;
+        canvas_draw_line(canvas, tx, ty, tx, ty + 20);
+        canvas_draw_line(canvas, tx + 1, ty, tx + 1, ty + 20);
+        canvas_draw_line(canvas, tx, ty, tx + 16, ty + 10);
+        canvas_draw_line(canvas, tx, ty + 1, tx + 16, ty + 11);
+        canvas_draw_line(canvas, tx + 16, ty + 10, tx, ty + 20);
+        canvas_draw_line(canvas, tx + 16, ty + 11, tx, ty + 21);
+
+        /* right list button */
+        int rx = cx + 28;
+        int ry = cy - 12;
+        canvas_set_color(canvas, ColorBlack);
+        canvas_draw_rbox(canvas, rx, ry, 24, 24, 3);
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_rbox(canvas, rx + 2, ry + 2, 20, 20, 2);
+        canvas_set_color(canvas, ColorBlack);
+        /* list icon: three horizontal lines, 2px thickness */
+        canvas_draw_line(canvas, rx + 6, ry + 7, rx + 17, ry + 7);
+        canvas_draw_line(canvas, rx + 6, ry + 8, rx + 17, ry + 8);
+        canvas_draw_line(canvas, rx + 6, ry + 11, rx + 17, ry + 11);
+        canvas_draw_line(canvas, rx + 6, ry + 12, rx + 17, ry + 12);
+        canvas_draw_line(canvas, rx + 6, ry + 15, rx + 17, ry + 15);
+        canvas_draw_line(canvas, rx + 6, ry + 16, rx + 17, ry + 16);
+        return;
+    }
+
+    /* ─── OFFICIAL LEVELS CAROUSEL ─── */
+    if(app->state == GAMESTATE_OFFICIALS) {
+        /* show current official level as a full-screen card, allow left/right to change */
+        int idx = app->official_sel;
+        if(idx < 0) idx = 0;
+        if(idx >= OFFICIAL_LEVEL_COUNT) idx = OFFICIAL_LEVEL_COUNT - 1;
+        canvas_set_font(canvas, FontPrimary);
+        /* draw big card */
+        canvas_set_color(canvas, ColorBlack);
+        canvas_draw_rbox(canvas, 6, 6, SCREEN_W - 12, SCREEN_H - 20, 4);
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_rbox(canvas, 8, 8, SCREEN_W - 16, SCREEN_H - 24, 2);
+        canvas_set_color(canvas, ColorBlack);
+        canvas_set_font(canvas, FontSecondary);
+        if(OFFICIAL_LEVEL_COUNT > 0) {
+            const char* name = OFFICIAL_LEVELS[idx].name;
+            int x = 12;
+            int y = SCREEN_H/2 - 4;
+            canvas_draw_str(canvas, x, y, name);
+        } else {
+            canvas_draw_str(canvas, 12, SCREEN_H/2 - 4, "No official levels");
+        }
+        return;
+    }
+
     /* ─── WIN ─── */
     if(app->state == GAMESTATE_WIN) {
         canvas_set_font(canvas, FontPrimary);
@@ -918,7 +1096,7 @@ static void render_callback(Canvas* canvas, void* ctx) {
         char buf[32];
         snprintf(buf, sizeof(buf), "Attempts: %d", (int)app->attempt);
         canvas_draw_str(canvas, 32, 34, buf);
-        canvas_draw_str(canvas, 20, 50, "OK=Menu  Back=Retry");
+        canvas_draw_str(canvas, 16, 50, "OK=Levels  Back=Retry");
     }
 }
 
@@ -935,8 +1113,12 @@ int32_t geoflip(void* p) {
 
     GeoApp* app = malloc(sizeof(GeoApp));
     memset(app, 0, sizeof(GeoApp));
-    app->state    = GAMESTATE_MENU;
+    app->state    = GAMESTATE_MAINMENU;
     app->menu_sel = 0;
+    app->custom_sel = 0;
+    app->official_sel = 0;
+    app->current_is_official = true;
+    app->current_level_idx = 0;
 
     app->level_count = (int8_t)discover_levels(app->level_files, MAX_LEVELS);
     for(int i = 0; i < app->level_count; i++) {
@@ -972,17 +1154,46 @@ int32_t geoflip(void* p) {
             case GAMESTATE_MENU:
                 if(pressed && ev.key == InputKeyUp) {
                     int n = app->level_count ? app->level_count : 1;
-                    app->menu_sel = (int8_t)((app->menu_sel - 1 + n) % n);
+                    app->custom_sel = (int8_t)((app->custom_sel - 1 + n) % n);
                 }
                 if(pressed && ev.key == InputKeyDown) {
                     int n = app->level_count ? app->level_count : 1;
-                    app->menu_sel = (int8_t)((app->menu_sel + 1) % n);
+                    app->custom_sel = (int8_t)((app->custom_sel + 1) % n);
                 }
                 if(pressed && ev.key == InputKeyOk && app->level_count > 0) {
                     app->attempt = 0; app->best_pct = 0;
-                    game_start_level(app, app->menu_sel);
+                    game_start_level(app, app->custom_sel);
+                }
+                if(pressed && ev.key == InputKeyBack) app->state = GAMESTATE_MAINMENU;
+                break;
+            case GAMESTATE_MAINMENU:
+                /* direct mapping: Left -> cube (no-op), OK -> officials, Right -> custom list */
+                if(pressed && ev.key == InputKeyLeft) {
+                    /* cube button — no action for now */
+                }
+                if(pressed && ev.key == InputKeyOk) {
+                    app->state = GAMESTATE_OFFICIALS;
+                }
+                if(pressed && ev.key == InputKeyRight) {
+                    app->state = GAMESTATE_MENU; /* reuse existing custom list */
                 }
                 if(pressed && ev.key == InputKeyBack) running = false;
+                break;
+
+            case GAMESTATE_OFFICIALS:
+                if(pressed && ev.key == InputKeyLeft) {
+                    int n = OFFICIAL_LEVEL_COUNT ? OFFICIAL_LEVEL_COUNT : 1;
+                    app->official_sel = (int8_t)((app->official_sel - 1 + n) % n);
+                }
+                if(pressed && ev.key == InputKeyRight) {
+                    int n = OFFICIAL_LEVEL_COUNT ? OFFICIAL_LEVEL_COUNT : 1;
+                    app->official_sel = (int8_t)((app->official_sel + 1) % n);
+                }
+                if(pressed && ev.key == InputKeyOk && OFFICIAL_LEVEL_COUNT > 0) {
+                    app->attempt = 0; app->best_pct = 0;
+                    game_start_official_level(app, app->official_sel);
+                }
+                if(pressed && ev.key == InputKeyBack) app->state = GAMESTATE_MAINMENU;
                 break;
 
             case GAMESTATE_PLAYING:
@@ -995,15 +1206,21 @@ int32_t geoflip(void* p) {
 
             case GAMESTATE_PAUSE:
                 if(pressed && ev.key == InputKeyOk)  app->state = GAMESTATE_PLAYING;
-                if(pressed && ev.key == InputKeyBack) app->state = GAMESTATE_MENU;
+                if(pressed && ev.key == InputKeyBack) {
+                    app->state = app->current_is_official ? GAMESTATE_OFFICIALS : GAMESTATE_MENU;
+                }
                 break;
 
             case GAMESTATE_DEAD:
-                if(pressed && ev.key == InputKeyBack) app->state = GAMESTATE_MENU;
+                if(pressed && ev.key == InputKeyBack) {
+                    app->state = app->current_is_official ? GAMESTATE_OFFICIALS : GAMESTATE_MENU;
+                }
                 break;
 
             case GAMESTATE_WIN:
-                if(pressed && ev.key == InputKeyOk)  app->state = GAMESTATE_MENU;
+                if(pressed && ev.key == InputKeyOk) {
+                    app->state = app->current_is_official ? GAMESTATE_OFFICIALS : GAMESTATE_MENU;
+                }
                 if(pressed && ev.key == InputKeyBack) {
                     app->attempt++;
                     game_reset(app);
@@ -1013,13 +1230,17 @@ int32_t geoflip(void* p) {
             }
         }
 
+        if(app->state == GAMESTATE_MAINMENU) {
+            app->menu_cam_x += SCROLL_SPEED;
+        }
+
         game_update(app);
 
         if(app->state == GAMESTATE_DEAD) {
             app->dead_timer++;
             death_particles_update(app);
             if(app->dead_timer == 1)  notification_message(notif, &sequence_reset_vibro);
-            if(app->dead_timer >= 63) game_start_level(app, app->menu_sel);
+            if(app->dead_timer >= 63) game_restart_current_level(app);
         }
 
         view_port_update(vp);

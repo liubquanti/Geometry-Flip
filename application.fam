@@ -17,5 +17,6 @@ App(
     fap_author="liubquanti",
     sources=[
         "geoflip.c",
+        "levels.c",
     ],
 )
