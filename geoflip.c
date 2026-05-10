@@ -847,17 +847,33 @@ static void render_callback(Canvas* canvas, void* ctx) {
 
         /* Overlay */
         if(app->state == GAMESTATE_PAUSE) {
+            const int card_x = 30;
+            const int card_y = 24;
+            const int card_w = 66;
+            const int card_h = 16;
+            canvas_set_color(canvas, ColorBlack);
+            canvas_draw_rbox(canvas, card_x, card_y, card_w, card_h, 3);
+            canvas_set_color(canvas, ColorWhite);
+            canvas_draw_rbox(canvas, card_x + 2, card_y + 2, card_w - 4, card_h - 4, 2);
+            canvas_set_color(canvas, ColorBlack);
             canvas_set_font(canvas, FontPrimary);
-            canvas_draw_str(canvas, 38, 35, "PAUSED");
-            canvas_set_font(canvas, FontSecondary);
-            canvas_draw_str(canvas, 28, 47, "OK=Resume  Back=Quit");
+            canvas_draw_str(canvas, 43, 36, "PAUSED");
         } else if(app->state == GAMESTATE_DEAD && app->dead_new_best) {
+            const int card_x = 26;
+            const int card_y = 18;
+            const int card_w = 76;
+            const int card_h = 30;
+            canvas_set_color(canvas, ColorBlack);
+            canvas_draw_rbox(canvas, card_x, card_y, card_w, card_h, 3);
+            canvas_set_color(canvas, ColorWhite);
+            canvas_draw_rbox(canvas, card_x + 2, card_y + 2, card_w - 4, card_h - 4, 2);
+            canvas_set_color(canvas, ColorBlack);
             canvas_set_font(canvas, FontPrimary);
-            canvas_draw_str(canvas, 33, 28, "NEW BEST");
+            canvas_draw_str(canvas, 40, 30, "NEW BEST");
             canvas_set_font(canvas, FontSecondary);
             char buf[16];
             snprintf(buf, sizeof(buf), "%d%%", (int)app->dead_pct);
-            canvas_draw_str(canvas, 54, 42, buf);
+            canvas_draw_str(canvas, 52, 41, buf);
         }
         return;
     }
