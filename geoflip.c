@@ -1090,21 +1090,34 @@ static void render_callback(Canvas* canvas, void* ctx) {
         int idx = app->official_sel;
         if(idx < 0) idx = 0;
         if(idx >= OFFICIAL_LEVEL_COUNT) idx = OFFICIAL_LEVEL_COUNT - 1;
-        canvas_set_font(canvas, FontPrimary);
-        /* draw big card */
-        canvas_set_color(canvas, ColorBlack);
-        canvas_draw_rbox(canvas, 6, 6, SCREEN_W - 12, SCREEN_H - 20, 4);
-        canvas_set_color(canvas, ColorWhite);
-        canvas_draw_rbox(canvas, 8, 8, SCREEN_W - 16, SCREEN_H - 24, 2);
-        canvas_set_color(canvas, ColorBlack);
         canvas_set_font(canvas, FontSecondary);
         if(OFFICIAL_LEVEL_COUNT > 0) {
+            canvas_set_font(canvas, FontPrimary);
+            /* draw big card only when there is an official level to show */
+            canvas_set_color(canvas, ColorBlack);
+            canvas_draw_rbox(canvas, 12, 10, SCREEN_W - 24, SCREEN_H - 20, 4);
+            canvas_set_color(canvas, ColorWhite);
+            canvas_draw_rbox(canvas, 14, 12, SCREEN_W - 28, SCREEN_H - 24, 2);
+            canvas_set_color(canvas, ColorBlack);
+            canvas_set_font(canvas, FontSecondary);
+            canvas_draw_icon(canvas, 3, 28, &I_button_left);
+            canvas_draw_icon(canvas, SCREEN_W - 7, 28, &I_button_right);
             const char* name = OFFICIAL_LEVELS[idx].name;
-            int x = 12;
-            int y = SCREEN_H/2 - 4;
-            canvas_draw_str(canvas, x, y, name);
+            canvas_draw_str_aligned(
+                canvas,
+                SCREEN_W / 2,
+                SCREEN_H / 2,
+                AlignCenter,
+                AlignCenter,
+                name);
         } else {
-            canvas_draw_str(canvas, 12, SCREEN_H/2 - 4, "No official levels");
+            canvas_draw_str_aligned(
+                canvas,
+                SCREEN_W / 2,
+                SCREEN_H / 2,
+                AlignCenter,
+                AlignCenter,
+                "No official levels");
         }
         return;
     }
