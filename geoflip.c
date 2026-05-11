@@ -1006,7 +1006,13 @@ static void render_callback(Canvas* canvas, void* ctx) {
             canvas_draw_rbox(canvas, card_x + 2, card_y + 2, card_w - 4, card_h - 4, 2);
             canvas_set_color(canvas, ColorBlack);
             canvas_set_font(canvas, FontPrimary);
-            canvas_draw_str(canvas, 43, 36, "PAUSED");
+            canvas_draw_str_aligned(
+                canvas,
+                card_x + card_w / 2,
+                card_y + card_h / 2,
+                AlignCenter,
+                AlignCenter,
+                "PAUSED");
         } else if(app->state == GAMESTATE_DEAD && app->dead_new_best) {
             const int card_x = 26;
             const int card_y = 18;
@@ -1018,11 +1024,23 @@ static void render_callback(Canvas* canvas, void* ctx) {
             canvas_draw_rbox(canvas, card_x + 2, card_y + 2, card_w - 4, card_h - 4, 2);
             canvas_set_color(canvas, ColorBlack);
             canvas_set_font(canvas, FontPrimary);
-            canvas_draw_str(canvas, 40, 30, "NEW BEST");
+            canvas_draw_str_aligned(
+                canvas,
+                card_x + card_w / 2,
+                card_y + 10,
+                AlignCenter,
+                AlignCenter,
+                "NEW BEST");
             canvas_set_font(canvas, FontSecondary);
             char buf[16];
             snprintf(buf, sizeof(buf), "%d%%", (int)app->dead_pct);
-            canvas_draw_str(canvas, 52, 41, buf);
+            canvas_draw_str_aligned(
+                canvas,
+                card_x + card_w / 2,
+                card_y + 21,
+                AlignCenter,
+                AlignCenter,
+                buf);
         }
         return;
     }
