@@ -27,6 +27,7 @@
 #include <math.h>
 
 #include "levels.h"
+#include "icons.h"
 
 /* ─── Constants ─────────────────────────────────────────────────── */
 
@@ -97,6 +98,7 @@ typedef struct {
 
 typedef enum {
     GAMESTATE_MENU = 0,
+    GAMESTATE_SPLASH,
     GAMESTATE_MAINMENU,
     GAMESTATE_OFFICIALS,
     GAMESTATE_PLAYING,
@@ -135,6 +137,7 @@ typedef struct {
     DeathParticle death_particles[DEATH_PARTICLES];
     uint32_t   frame;
     int32_t    menu_cam_x;
+    uint16_t   splash_frames;
 
     /* menu */
     char    level_files[MAX_LEVELS][MAX_PATH_LEN];
@@ -816,6 +819,18 @@ static void draw_background(Canvas* canvas, char style, int cam_x) {
     }
 }
 
+static void draw_splash_screen(Canvas* canvas) {
+    canvas_set_color(canvas, ColorBlack);
+    canvas_set_font(canvas, FontSecondary);
+        /* center-aligned title and subtitle above the icon */
+        canvas_draw_str_aligned(canvas, SCREEN_W/2, 6, AlignCenter, AlignTop, "Video Game Module");
+        canvas_draw_str_aligned(canvas, SCREEN_W/2, 51, AlignCenter, AlignTop, "Recommended");
+        /* icon centered horizontally (I_video_game_module is 60px wide) */
+        canvas_draw_icon(canvas, (SCREEN_W - 60) / 2, 19, &I_video_game_module);
+}
+
+
+
 static void draw_decorations(Canvas* canvas, const Level* lvl, int cam_x) {
     for(int i = 0; i < lvl->dec_count; i++) {
         const Decoration* d = &lvl->decorations[i];
@@ -890,6 +905,12 @@ static void render_callback(Canvas* canvas, void* ctx) {
     GeoApp* app = (GeoApp*)ctx;
     canvas_clear(canvas);
     canvas_set_color(canvas, ColorBlack);
+
+    /* ─── SPLASH ─── */
+    if(app->state == GAMESTATE_SPLASH) {
+        draw_splash_screen(canvas);
+        return;
+    }
 
     /* ─── MENU ─── */
     if(app->state == GAMESTATE_MENU) {
@@ -1113,12 +1134,13 @@ int32_t geoflip(void* p) {
 
     GeoApp* app = malloc(sizeof(GeoApp));
     memset(app, 0, sizeof(GeoApp));
-    app->state    = GAMESTATE_MAINMENU;
+    app->state    = GAMESTATE_SPLASH;
     app->menu_sel = 0;
     app->custom_sel = 0;
     app->official_sel = 0;
     app->current_is_official = true;
     app->current_level_idx = 0;
+    app->splash_frames = 0;
 
     app->level_count = (int8_t)discover_levels(app->level_files, MAX_LEVELS);
     for(int i = 0; i < app->level_count; i++) {
@@ -1151,6 +1173,10 @@ int32_t geoflip(void* p) {
             bool released = (ev.type == InputTypeRelease);
 
             switch(app->state) {
+            case GAMESTATE_SPLASH:
+                /* no input during splash */
+                break;
+
             case GAMESTATE_MENU:
                 if(pressed && ev.key == InputKeyUp) {
                     int n = app->level_count ? app->level_count : 1;
@@ -1188,7 +1214,7 @@ int32_t geoflip(void* p) {
                 if(pressed && ev.key == InputKeyRight) {
                     int n = OFFICIAL_LEVEL_COUNT ? OFFICIAL_LEVEL_COUNT : 1;
                     app->official_sel = (int8_t)((app->official_sel + 1) % n);
-                }
+                } 
                 if(pressed && ev.key == InputKeyOk && OFFICIAL_LEVEL_COUNT > 0) {
                     app->attempt = 0; app->best_pct = 0;
                     game_start_official_level(app, app->official_sel);
@@ -1230,6 +1256,13 @@ int32_t geoflip(void* p) {
             }
         }
 
+        if(app->state == GAMESTATE_SPLASH) {
+            app->splash_frames++;
+            if(app->splash_frames >= 130) {
+                app->state = GAMESTATE_MAINMENU;
+            }
+        }
+
         if(app->state == GAMESTATE_MAINMENU) {
             app->menu_cam_x += SCROLL_SPEED;
         }
@@ -1244,7 +1277,7 @@ int32_t geoflip(void* p) {
         }
 
         view_port_update(vp);
-        furi_delay_ms(16); /* must be 16 */
+        furi_delay_ms(23); /* must be 16 */
     }
 
     gui_remove_view_port(gui, vp);
