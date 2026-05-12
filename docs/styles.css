@@ -92,11 +92,17 @@ select {
 .field input,
 .field select {
   width: 100%;
+  height: 38px;
   border: 2px solid var(--orange);
   background: var(--black);
   color: var(--orange);
-  padding: 8px 10px;
+  padding: 0 10px;
+  line-height: 1;
   outline: none;
+}
+
+.field select {
+  padding-right: 26px;
 }
 
 .field input::selection {
@@ -112,12 +118,86 @@ select {
   min-width: 180px;
 }
 
+/* Range slider styling */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  padding: 0;
+  border: none;
+  margin: 0;
+  height: 38px;
+  background: transparent;
+  width: 100%;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  background: var(--black);
+  border: var(--border) solid var(--orange);
+  cursor: pointer;
+  margin-top: -9px;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  background: var(--orange);
+  height: 2px;
+  border: none;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  background: var(--black);
+  border: var(--border) solid var(--orange);
+  cursor: pointer;
+  border-radius: 0;
+  margin-top: -9px;
+}
+
+input[type="range"]::-moz-range-track {
+  background: var(--orange);
+  border: none;
+  height: 2px;
+  border-top: 1px solid var(--orange);
+  border-bottom: 1px solid var(--orange);
+}
+
+input[type="range"]::-moz-range-progress {
+  background: transparent;
+  border: none;
+  height: 2px;
+  border-top: 1px solid var(--orange);
+  border-bottom: 1px solid var(--orange);
+}
+
 .actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  justify-content: flex-end;
+  min-width: 240px;
+}
+
+.actions-title {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+}
+
+.actions .actions-title {
+  padding-left: 2px;
+}
+
+.actions-buttons {
   display: flex;
   gap: 8px;
   align-items: center;
   justify-content: flex-end;
-  min-width: 240px;
+  flex-wrap: wrap;
+  height: 38px;
 }
 
 button {
@@ -128,6 +208,7 @@ button {
   cursor: pointer;
   letter-spacing: 0.12em;
   text-transform: uppercase;
+  height: 38px;
 }
 
 button:hover,
