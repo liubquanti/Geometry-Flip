@@ -1119,6 +1119,33 @@ static void render_callback(Canvas* canvas, void* ctx) {
         canvas_draw_line(canvas, rx + 6, ry + 12, rx + 17, ry + 12);
         canvas_draw_line(canvas, rx + 6, ry + 15, rx + 17, ry + 15);
         canvas_draw_line(canvas, rx + 6, ry + 16, rx + 17, ry + 16);
+
+        /* bottom button hints: Left / OK / Right */
+        const int hint_center_y = SCREEN_H - 14;
+        const int hint_y = SCREEN_H - 22;
+        const int hint_r = 6;
+        const int hint_side_r = 5;
+        const int hint_x_left = 23;
+        const int hint_x_center = SCREEN_W / 2;
+        const int hint_x_right = SCREEN_W - 24;
+
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_disc(canvas, hint_x_left, hint_y, hint_side_r);
+        canvas_set_color(canvas, ColorBlack);
+        canvas_draw_circle(canvas, hint_x_left, hint_y, hint_side_r);
+        canvas_draw_icon(canvas, hint_x_left - 2, hint_y - 3, &I_button_left);
+
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_disc(canvas, hint_x_center, hint_center_y, hint_r);
+        canvas_set_color(canvas, ColorBlack);
+        canvas_draw_circle(canvas, hint_x_center, hint_center_y, hint_r);
+        canvas_draw_icon(canvas, hint_x_center - 3, hint_center_y - 3, &I_button_center);
+
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_disc(canvas, hint_x_right, hint_y, hint_side_r);
+        canvas_set_color(canvas, ColorBlack);
+        canvas_draw_circle(canvas, hint_x_right, hint_y, hint_side_r);
+        canvas_draw_icon(canvas, hint_x_right - 1, hint_y - 3, &I_button_right);
         return;
     }
 
