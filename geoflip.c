@@ -49,6 +49,9 @@
 #define ROT_SPEED_AIR   9.0f
 #define ROT_SNAP_SPEED  18.0f
 #define DEATH_PARTICLES 24
+#define MENU_CUBE_PERIOD_FRAMES 174 /* ~4s at 23ms per frame */
+#define MENU_JUMP_PERIOD_FRAMES 43  /* ~1s at 23ms per frame */
+#define MENU_CUBE_SPEED ((float)(SCREEN_W + PLAYER_SIZE * 20) / MENU_CUBE_PERIOD_FRAMES)
 
 /* How many cells ahead/behind to check each frame (must cover 1 full screen) */
 #define WINDOW_CELLS    (SCREEN_W / CELL + 2)   /* 18 */
@@ -138,6 +141,15 @@ typedef struct {
     uint32_t   frame;
     int32_t    menu_cam_x;
     uint16_t   splash_frames;
+    float      menu_cube_x;
+    float      menu_cube_y;
+    float      menu_cube_vy;
+    float      menu_cube_angle;
+    bool       menu_cube_snapping;
+    int8_t     menu_cube_lock_angle;
+    uint16_t   menu_cube_timer;
+    uint16_t   menu_jump_timer;
+    bool       menu_cube_on_ground;
 
     /* menu */
     char    level_files[MAX_LEVELS][MAX_PATH_LEN];
@@ -1063,6 +1075,22 @@ static void render_callback(Canvas* canvas, void* ctx) {
         canvas_set_font(canvas, FontPrimary);
         canvas_draw_str(canvas, 21, 8, "GEOMETRY FLIP");
 
+        /* ground fill and moving cube hint (behind buttons) */
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_box(canvas, 0, GROUND_Y, SCREEN_W, SCREEN_H - GROUND_Y);
+        canvas_set_color(canvas, ColorBlack);
+        canvas_draw_line(canvas, 0, GROUND_Y, SCREEN_W - 1, GROUND_Y);
+        int menu_cube_x = (int)app->menu_cube_x;
+        int menu_cube_y = (int)app->menu_cube_y;
+        int mcx = menu_cube_x + PLAYER_SIZE / 2;
+        int mcy = menu_cube_y + PLAYER_SIZE / 2;
+        const int mr = PLAYER_SIZE / 2;
+        const int mbuf = 2;
+        if(mcx - mr - mbuf >= 0 && mcx + mr + mbuf < SCREEN_W &&
+           mcy - mr - mbuf >= 0 && mcy + mr + mbuf < SCREEN_H) {
+            draw_player_rotated(canvas, mcx, mcy, app->menu_cube_angle);
+        }
+
         /* left small cube button */
         int lx = cx - 52;
         int ly = cy - 12;
@@ -1223,6 +1251,15 @@ int32_t geoflip(void* p) {
     app->current_is_official = true;
     app->current_level_idx = 0;
     app->splash_frames = 0;
+    app->menu_cube_x = -PLAYER_SIZE;
+    app->menu_cube_y = (float)(GROUND_Y - PLAYER_SIZE);
+    app->menu_cube_vy = 0.0f;
+    app->menu_cube_angle = 0.0f;
+    app->menu_cube_snapping = false;
+    app->menu_cube_lock_angle = 0;
+    app->menu_cube_timer = 0;
+    app->menu_jump_timer = 0;
+    app->menu_cube_on_ground = true;
 
     app->level_count = (int8_t)discover_levels(app->level_files, MAX_LEVELS);
     for(int i = 0; i < app->level_count; i++) {
@@ -1347,6 +1384,55 @@ int32_t geoflip(void* p) {
 
         if(app->state == GAMESTATE_MAINMENU) {
             app->menu_cam_x += SCROLL_SPEED;
+            app->menu_cube_timer++;
+            app->menu_jump_timer++;
+
+            bool was_airborne = !app->menu_cube_on_ground;
+            if(app->menu_cube_lock_angle > 0) app->menu_cube_lock_angle--;
+
+            if(app->menu_jump_timer >= MENU_JUMP_PERIOD_FRAMES) {
+                app->menu_jump_timer = 0;
+                if(app->menu_cube_on_ground && (rand() & 1)) {
+                    app->menu_cube_vy = JUMP_VEL;
+                    app->menu_cube_on_ground = false;
+                    app->menu_cube_lock_angle = 0;
+                }
+            }
+
+            app->menu_cube_x += MENU_CUBE_SPEED;
+            if(app->menu_cube_timer >= MENU_CUBE_PERIOD_FRAMES ||
+               app->menu_cube_x > SCREEN_W + PLAYER_SIZE) {
+                app->menu_cube_timer = 0;
+                app->menu_cube_x = -PLAYER_SIZE;
+            }
+
+            app->menu_cube_vy += GRAVITY;
+            app->menu_cube_y += app->menu_cube_vy;
+            float ground_y = (float)(GROUND_Y - PLAYER_SIZE);
+            if(app->menu_cube_y >= ground_y) {
+                app->menu_cube_y = ground_y;
+                app->menu_cube_vy = 0.0f;
+                app->menu_cube_on_ground = true;
+            }
+
+            if(!app->menu_cube_on_ground) {
+                app->menu_cube_snapping = false;
+                if(app->menu_cube_lock_angle <= 0) {
+                    app->menu_cube_angle += ROT_SPEED_AIR;
+                    if(app->menu_cube_angle >= 360.0f) app->menu_cube_angle -= 360.0f;
+                }
+            } else {
+                if(was_airborne && app->menu_cube_on_ground) app->menu_cube_snapping = true;
+                if(app->menu_cube_snapping) {
+                    float tgt = nearest_90(app->menu_cube_angle);
+                    app->menu_cube_angle = angle_approach(app->menu_cube_angle, tgt, ROT_SNAP_SPEED);
+                    float diff = app->menu_cube_angle - tgt;
+                    if(diff < 0.0f) diff = -diff;
+                    if(diff < 1.5f) { app->menu_cube_angle = tgt; app->menu_cube_snapping = false; }
+                } else {
+                    app->menu_cube_angle = nearest_90(app->menu_cube_angle);
+                }
+            }
         }
 
         game_update(app);
