@@ -1003,7 +1003,11 @@ static void render_callback(Canvas* canvas, void* ctx) {
             canvas_set_color(canvas, ColorBlack);
             canvas_draw_rbox(canvas, card_x, card_y, card_w, card_h, 3);
             canvas_set_color(canvas, ColorWhite);
+            canvas_draw_rbox(canvas, card_x + 1, card_y + 1, card_w - 2, card_h - 2, 2);
+            canvas_set_color(canvas, ColorBlack);
             canvas_draw_rbox(canvas, card_x + 2, card_y + 2, card_w - 4, card_h - 4, 2);
+            canvas_set_color(canvas, ColorWhite);
+            canvas_draw_rbox(canvas, card_x + 3, card_y + 3, card_w - 6, card_h - 6, 1);
             canvas_set_color(canvas, ColorBlack);
             canvas_set_font(canvas, FontPrimary);
             canvas_draw_str_aligned(
@@ -1021,7 +1025,11 @@ static void render_callback(Canvas* canvas, void* ctx) {
             canvas_set_color(canvas, ColorBlack);
             canvas_draw_rbox(canvas, card_x, card_y, card_w, card_h, 3);
             canvas_set_color(canvas, ColorWhite);
+            canvas_draw_rbox(canvas, card_x + 1, card_y + 1, card_w - 2, card_h - 2, 2);
+            canvas_set_color(canvas, ColorBlack);
             canvas_draw_rbox(canvas, card_x + 2, card_y + 2, card_w - 4, card_h - 4, 2);
+            canvas_set_color(canvas, ColorWhite);
+            canvas_draw_rbox(canvas, card_x + 3, card_y + 3, card_w - 6, card_h - 6, 1);
             canvas_set_color(canvas, ColorBlack);
             canvas_set_font(canvas, FontPrimary);
             canvas_draw_str_aligned(
@@ -1061,7 +1069,11 @@ static void render_callback(Canvas* canvas, void* ctx) {
         canvas_set_color(canvas, ColorBlack);
         canvas_draw_rbox(canvas, lx, ly, 24, 24, 3);
         canvas_set_color(canvas, ColorWhite);
+        canvas_draw_rbox(canvas, lx + 1, ly + 1, 22, 22, 2);
+        canvas_set_color(canvas, ColorBlack);
         canvas_draw_rbox(canvas, lx + 2, ly + 2, 20, 20, 2);
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_rbox(canvas, lx + 3, ly + 3, 18, 18, 1);
         canvas_set_color(canvas, ColorBlack);
         /* cube icon, 2px thickness */
         canvas_draw_frame(canvas, lx + 6, ly + 6, 12, 12);
@@ -1073,7 +1085,11 @@ static void render_callback(Canvas* canvas, void* ctx) {
         canvas_set_color(canvas, ColorBlack);
         canvas_draw_rbox(canvas, px, py, 40, 40, 3);
         canvas_set_color(canvas, ColorWhite);
+        canvas_draw_rbox(canvas, px + 1, py + 1, 38, 38, 2);
+        canvas_set_color(canvas, ColorBlack);
         canvas_draw_rbox(canvas, px + 2, py + 2, 36, 36, 2);
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_rbox(canvas, px + 3, py + 3, 34, 34, 1);
         canvas_set_color(canvas, ColorBlack);
         /* triangle, 2px thickness */
         int tx = px + 12, ty = py + 9;
@@ -1090,7 +1106,11 @@ static void render_callback(Canvas* canvas, void* ctx) {
         canvas_set_color(canvas, ColorBlack);
         canvas_draw_rbox(canvas, rx, ry, 24, 24, 3);
         canvas_set_color(canvas, ColorWhite);
+        canvas_draw_rbox(canvas, rx + 1, ry + 1, 22, 22, 2);
+        canvas_set_color(canvas, ColorBlack);
         canvas_draw_rbox(canvas, rx + 2, ry + 2, 20, 20, 2);
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_rbox(canvas, rx + 3, ry + 3, 18, 18, 1);
         canvas_set_color(canvas, ColorBlack);
         /* list icon: three horizontal lines, 2px thickness */
         canvas_draw_line(canvas, rx + 6, ry + 7, rx + 17, ry + 7);
@@ -1115,7 +1135,11 @@ static void render_callback(Canvas* canvas, void* ctx) {
             canvas_set_color(canvas, ColorBlack);
             canvas_draw_rbox(canvas, 12, 10, SCREEN_W - 24, SCREEN_H - 20, 4);
             canvas_set_color(canvas, ColorWhite);
+            canvas_draw_rbox(canvas, 13, 11, SCREEN_W - 26, SCREEN_H - 22, 3);
+            canvas_set_color(canvas, ColorBlack);
             canvas_draw_rbox(canvas, 14, 12, SCREEN_W - 28, SCREEN_H - 24, 2);
+            canvas_set_color(canvas, ColorWhite);
+            canvas_draw_rbox(canvas, 15, 13, SCREEN_W - 30, SCREEN_H - 26, 1);
             canvas_set_color(canvas, ColorBlack);
             canvas_set_font(canvas, FontSecondary);
             canvas_draw_icon(canvas, 3, 28, &I_button_left);
