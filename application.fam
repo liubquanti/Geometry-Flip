@@ -12,7 +12,7 @@ App(
     fap_icon_assets="assets",
     stack_size=2 * 1024,
     fap_category="Games",
-    fap_version="0.3",
+    fap_version="0.4",
     fap_description="Geometry Dash clone for Flipper Zero.",
     fap_author="liubquanti",
     sources=[
