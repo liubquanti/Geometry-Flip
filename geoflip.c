@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdio.h>
 
 #include "levels.h"
 #include "icons.h"
@@ -103,6 +104,7 @@ typedef enum {
     GAMESTATE_MENU = 0,
     GAMESTATE_SPLASH,
     GAMESTATE_MAINMENU,
+    GAMESTATE_SKINS,
     GAMESTATE_OFFICIALS,
     GAMESTATE_PLAYING,
     GAMESTATE_DEAD,
@@ -150,6 +152,7 @@ typedef struct {
     uint16_t   menu_cube_timer;
     uint16_t   menu_jump_timer;
     bool       menu_cube_on_ground;
+    int8_t     menu_cube_skin;
 
     /* menu */
     char    level_files[MAX_LEVELS][MAX_PATH_LEN];
@@ -158,6 +161,10 @@ typedef struct {
     int8_t  menu_sel;
     int8_t  custom_sel;
     int8_t  official_sel;
+
+    /* customization */
+    int8_t  selected_skin; /* index of chosen skin */
+    int8_t  skin_cursor;   /* UI cursor while selecting */
 
     bool    current_is_official;
     int8_t  current_level_idx;
@@ -184,23 +191,36 @@ static int icos128(int deg) { return isin128(deg + 90); }
 
 /* ─── Draw rotated cube ──────────────────────────────────────────── */
 
-static void draw_player_rotated(Canvas* canvas, int cx, int cy, float angle_f) {
-    const int R  = PLAYER_SIZE / 2;
+/* Built-in 8x8 skins: 1 = black(+), 0 = white(-) */
+static const int SKIN_COUNT = 4;
+static const uint8_t SKINS[4][8] = {
+    { 0xFF, 0x81, 0xA5, 0xA5, 0x81, 0xBD, 0x81, 0xFF },
+    { 0xFF, 0x81, 0xBD, 0xA5, 0xA5, 0xBD, 0x81, 0xFF },
+    { 0xFF, 0xC3, 0xA5, 0x99, 0x99, 0xA5, 0xC3, 0xFF },
+    { 0xFF, 0xCF, 0xC9, 0xF9, 0x9F, 0x93, 0xF3, 0xFF },
+};
+
+static void draw_player_rotated(Canvas* canvas, int cx, int cy, float angle_f, int skin) {
     int ang = (int)angle_f;
     ang = ((ang % 360) + 360) % 360;
     int sa = isin128(ang), ca = icos128(ang);
-    const int cx4[4] = {-R, R,  R, -R};
-    const int cy4[4] = {-R,-R,  R,  R};
-    int px[4], py[4];
-    for(int i = 0; i < 4; i++) {
-        px[i] = cx + ((cx4[i]*ca - cy4[i]*sa + 64) >> 7);
-        py[i] = cy + ((cx4[i]*sa + cy4[i]*ca + 64) >> 7);
+    /* draw skin pixels (8x8) rotated with same trig to preserve animation */
+    if(skin >= 0 && skin < SKIN_COUNT) {
+        const uint8_t* bmp = SKINS[skin];
+        /* pixel coordinates: i=0..7, j=0..7; center map to -R..R-1 */
+        for(int j = 0; j < PLAYER_SIZE; j++) {
+            uint8_t row = bmp[j];
+            for(int i = 0; i < PLAYER_SIZE; i++) {
+                if(row & (1 << (7 - i))) {
+                    int x0 = i - (PLAYER_SIZE / 2);
+                    int y0 = j - (PLAYER_SIZE / 2);
+                    int pxp = cx + ((x0 * ca - y0 * sa + 64) >> 7);
+                    int pyp = cy + ((x0 * sa + y0 * ca + 64) >> 7);
+                    canvas_draw_box(canvas, pxp, pyp, 1, 1);
+                }
+            }
+        }
     }
-    for(int i = 0; i < 4; i++) {
-        int j = (i+1) & 3;
-        canvas_draw_line(canvas, px[i], py[i], px[j], py[j]);
-    }
-    canvas_draw_line(canvas, px[0], py[0], px[2], py[2]);
 }
 
 /* ─── Sort helpers ───────────────────────────────────────────────── */
@@ -349,6 +369,10 @@ static bool parse_level_from_text(const char* text, Level* lvl) {
     sort_objects(lvl->objects, lvl->obj_count);
     return true;
 }
+
+/* forward declarations for profile persistence */
+static void save_player_profile(GeoApp* app);
+static void load_player_profile(GeoApp* app);
 
 /* ─── Level Discovery ────────────────────────────────────────────── */
 
@@ -988,9 +1012,9 @@ static void render_callback(Canvas* canvas, void* ctx) {
             const int R = PLAYER_SIZE / 2;
             /* Extend buffer by 2px to give cushion at edges before skipping draw */
             const int buf = 2;
-            if(cx - R - buf >= 0 && cx + R + buf < SCREEN_W && 
+                if(cx - R - buf >= 0 && cx + R + buf < SCREEN_W && 
                cy - R - buf >= 0 && cy + R + buf < SCREEN_H) {
-                draw_player_rotated(canvas, cx, cy, app->angle);
+                draw_player_rotated(canvas, cx, cy, app->angle, app->selected_skin);
             }
         } else {
             death_particles_draw(canvas, app);
@@ -1065,6 +1089,57 @@ static void render_callback(Canvas* canvas, void* ctx) {
         return;
     }
 
+    /* ─── SKIN SELECT ─── */
+    if(app->state == GAMESTATE_SKINS) {
+        canvas_set_font(canvas, FontPrimary);
+        canvas_draw_str(canvas, 22, 8, "CHOOSE CUBE");
+        /* draw centered card */
+        const int card_x = 18;
+        const int card_y = 14;
+        const int card_w = SCREEN_W - 36;
+        const int card_h = SCREEN_H - 30;
+        canvas_set_color(canvas, ColorBlack);
+        canvas_draw_rbox(canvas, card_x, card_y, card_w, card_h, 3);
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_rbox(canvas, card_x + 1, card_y + 1, card_w - 2, card_h - 2, 2);
+        canvas_set_color(canvas, ColorBlack);
+        canvas_draw_rbox(canvas, card_x + 2, card_y + 2, card_w - 4, card_h - 4, 2);
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_rbox(canvas, card_x + 3, card_y + 3, card_w - 6, card_h - 6, 1);
+        /* layout 2x2 icons centered */
+        const int icon_w = 8, icon_h = 8;
+        const int cols = 2;
+        const int spacing = 16;
+        int start_x = card_x + (card_w - (cols * icon_w + (cols-1) * spacing)) / 2;
+        int start_y = card_y + 18;
+        for(int idx = 0; idx < SKIN_COUNT; idx++) {
+            int col = idx % cols;
+            int row = idx / cols;
+            int sx = start_x + col * (icon_w + spacing);
+            int sy = start_y + row * (icon_h + spacing);
+            /* highlight */
+            if(app->skin_cursor == idx) {
+                canvas_set_color(canvas, ColorBlack);
+                canvas_draw_rbox(canvas, sx - 4, sy - 4, icon_w + 8, icon_h + 8, 2);
+                canvas_set_color(canvas, ColorWhite);
+            }
+            /* draw 8x8 bitmap */
+            const uint8_t* bmp = SKINS[idx];
+            for(int y = 0; y < icon_h; y++) {
+                uint8_t rowbits = bmp[y];
+                for(int x = 0; x < icon_w; x++) {
+                    if(rowbits & (1 << (7 - x))) {
+                        canvas_draw_box(canvas, sx + x, sy + y, 1, 1);
+                    }
+                }
+            }
+        }
+        /* hint */
+        canvas_set_font(canvas, FontSecondary);
+        canvas_draw_str(canvas, 18, SCREEN_H - 12, "Left/Right/Up/Down: Move  OK: Select  Back: Cancel");
+        return;
+    }
+
     /* ─── MAIN MENU (three-button) ─── */
     if(app->state == GAMESTATE_MAINMENU) {
         draw_background(canvas, '1', app->menu_cam_x);
@@ -1088,7 +1163,7 @@ static void render_callback(Canvas* canvas, void* ctx) {
         const int mbuf = 2;
         if(mcx - mr - mbuf >= 0 && mcx + mr + mbuf < SCREEN_W &&
            mcy - mr - mbuf >= 0 && mcy + mr + mbuf < SCREEN_H) {
-            draw_player_rotated(canvas, mcx, mcy, app->menu_cube_angle);
+            draw_player_rotated(canvas, mcx, mcy, app->menu_cube_angle, app->menu_cube_skin);
         }
 
         /* left small cube button */
@@ -1103,9 +1178,8 @@ static void render_callback(Canvas* canvas, void* ctx) {
         canvas_set_color(canvas, ColorWhite);
         canvas_draw_rbox(canvas, lx + 3, ly + 3, 18, 18, 1);
         canvas_set_color(canvas, ColorBlack);
-        /* cube icon, 2px thickness */
-        canvas_draw_frame(canvas, lx + 6, ly + 6, 12, 12);
-        canvas_draw_frame(canvas, lx + 7, ly + 7, 10, 10);
+        /* character icon */
+        canvas_draw_icon(canvas, lx + 5, ly + 5, &I_character);
 
         /* center play button (large) */
         int px = cx - 20;
@@ -1119,14 +1193,8 @@ static void render_callback(Canvas* canvas, void* ctx) {
         canvas_set_color(canvas, ColorWhite);
         canvas_draw_rbox(canvas, px + 3, py + 3, 34, 34, 1);
         canvas_set_color(canvas, ColorBlack);
-        /* triangle, 2px thickness */
-        int tx = px + 12, ty = py + 9;
-        canvas_draw_line(canvas, tx, ty, tx, ty + 20);
-        canvas_draw_line(canvas, tx + 1, ty, tx + 1, ty + 20);
-        canvas_draw_line(canvas, tx, ty, tx + 16, ty + 10);
-        canvas_draw_line(canvas, tx, ty + 1, tx + 16, ty + 11);
-        canvas_draw_line(canvas, tx + 16, ty + 10, tx, ty + 20);
-        canvas_draw_line(canvas, tx + 16, ty + 11, tx, ty + 21);
+        /* play icon */
+        canvas_draw_icon(canvas, px + 10, py + 10, &I_play);
 
         /* right list button */
         int rx = cx + 28;
@@ -1140,13 +1208,8 @@ static void render_callback(Canvas* canvas, void* ctx) {
         canvas_set_color(canvas, ColorWhite);
         canvas_draw_rbox(canvas, rx + 3, ry + 3, 18, 18, 1);
         canvas_set_color(canvas, ColorBlack);
-        /* list icon: three horizontal lines, 2px thickness */
-        canvas_draw_line(canvas, rx + 6, ry + 7, rx + 17, ry + 7);
-        canvas_draw_line(canvas, rx + 6, ry + 8, rx + 17, ry + 8);
-        canvas_draw_line(canvas, rx + 6, ry + 11, rx + 17, ry + 11);
-        canvas_draw_line(canvas, rx + 6, ry + 12, rx + 17, ry + 12);
-        canvas_draw_line(canvas, rx + 6, ry + 15, rx + 17, ry + 15);
-        canvas_draw_line(canvas, rx + 6, ry + 16, rx + 17, ry + 16);
+        /* tools icon */
+        canvas_draw_icon(canvas, rx + 5, ry + 5, &I_tools);
 
         /* bottom button hints: Left / OK / Right */
         const int hint_center_y = SCREEN_H - 14;
@@ -1248,6 +1311,8 @@ int32_t geoflip(void* p) {
     app->menu_sel = 0;
     app->custom_sel = 0;
     app->official_sel = 0;
+    app->selected_skin = 0;
+    app->skin_cursor = 0;
     app->current_is_official = true;
     app->current_level_idx = 0;
     app->splash_frames = 0;
@@ -1260,6 +1325,12 @@ int32_t geoflip(void* p) {
     app->menu_cube_timer = 0;
     app->menu_jump_timer = 0;
     app->menu_cube_on_ground = true;
+    app->menu_cube_skin = 0;
+
+    srand((unsigned)furi_get_tick());
+
+    /* load persisted player profile if present */
+    load_player_profile(app);
 
     app->level_count = (int8_t)discover_levels(app->level_files, MAX_LEVELS);
     for(int i = 0; i < app->level_count; i++) {
@@ -1286,6 +1357,7 @@ int32_t geoflip(void* p) {
     bool       running = true;
     InputEvent ev;
 
+    GameState prev_state = app->state;
     while(running) {
         while(furi_message_queue_get(queue, &ev, 0) == FuriStatusOk) {
             bool pressed  = (ev.type == InputTypePress || ev.type == InputTypeRepeat);
@@ -1312,9 +1384,10 @@ int32_t geoflip(void* p) {
                 if(pressed && ev.key == InputKeyBack) app->state = GAMESTATE_MAINMENU;
                 break;
             case GAMESTATE_MAINMENU:
-                /* direct mapping: Left -> cube (no-op), OK -> officials, Right -> custom list */
+                /* direct mapping: Left -> cube chooser, OK -> officials, Right -> custom list */
                 if(pressed && ev.key == InputKeyLeft) {
-                    /* cube button — no action for now */
+                    app->skin_cursor = app->selected_skin; /* start cursor at current */
+                    app->state = GAMESTATE_SKINS;
                 }
                 if(pressed && ev.key == InputKeyOk) {
                     app->state = GAMESTATE_OFFICIALS;
@@ -1323,6 +1396,32 @@ int32_t geoflip(void* p) {
                     app->state = GAMESTATE_MENU; /* reuse existing custom list */
                 }
                 if(pressed && ev.key == InputKeyBack) running = false;
+                break;
+
+            case GAMESTATE_SKINS:
+                if(pressed && ev.key == InputKeyLeft) {
+                    app->skin_cursor = (int8_t)((app->skin_cursor - 1 + SKIN_COUNT) % SKIN_COUNT);
+                }
+                if(pressed && ev.key == InputKeyRight) {
+                    app->skin_cursor = (int8_t)((app->skin_cursor + 1) % SKIN_COUNT);
+                }
+                if(pressed && ev.key == InputKeyUp) {
+                    /* move -2 to go up a row in 2xN layout */
+                    app->skin_cursor = (int8_t)((app->skin_cursor - 2 + SKIN_COUNT) % SKIN_COUNT);
+                }
+                if(pressed && ev.key == InputKeyDown) {
+                    app->skin_cursor = (int8_t)((app->skin_cursor + 2) % SKIN_COUNT);
+                }
+                if(pressed && ev.key == InputKeyOk) {
+                    app->selected_skin = app->skin_cursor;
+                    save_player_profile(app);
+                    /* immediately reload to confirm persistence */
+                    load_player_profile(app);
+                    app->state = GAMESTATE_MAINMENU;
+                }
+                if(pressed && ev.key == InputKeyBack) {
+                    app->state = GAMESTATE_MAINMENU;
+                }
                 break;
 
             case GAMESTATE_OFFICIALS:
@@ -1380,6 +1479,10 @@ int32_t geoflip(void* p) {
             if(app->splash_frames >= 130) {
                 app->state = GAMESTATE_MAINMENU;
             }
+        }
+
+        if(app->state == GAMESTATE_MAINMENU && prev_state != GAMESTATE_MAINMENU) {
+            app->menu_cube_skin = (int8_t)(rand() % SKIN_COUNT);
         }
 
         if(app->state == GAMESTATE_MAINMENU) {
@@ -1445,6 +1548,7 @@ int32_t geoflip(void* p) {
         }
 
         view_port_update(vp);
+        prev_state = app->state;
         furi_delay_ms(23); /* must be 16 */
     }
 
@@ -1453,6 +1557,59 @@ int32_t geoflip(void* p) {
     furi_message_queue_free(queue);
     furi_record_close(RECORD_GUI);
     furi_record_close(RECORD_NOTIFICATION);
+    /* ensure profile saved on exit */
+    save_player_profile(app);
     free(app);
     return 0;
+}
+
+/* ─── Player profile (persistence) ───────────────────────────────── */
+static void save_player_profile(GeoApp* app) {
+    const char* dir = "/ext/geoflip/player";
+    const char* path = "/ext/geoflip/player/profile.txt";
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    storage_simply_mkdir(storage, dir);
+    File* file = storage_file_alloc(storage);
+    /* Try opening existing file for write first, otherwise create/truncate */
+    if(!storage_file_open(file, path, FSAM_WRITE, FSOM_OPEN_EXISTING)) {
+        storage_file_close(file);
+        storage_file_free(file);
+        /* try create new */
+        file = storage_file_alloc(storage);
+        if(!storage_file_open(file, path, FSAM_WRITE, FSOM_CREATE_NEW)) {
+            storage_file_free(file);
+            furi_record_close(RECORD_STORAGE);
+            return;
+        }
+    }
+    char buf[16];
+    int len = snprintf(buf, sizeof(buf), "%d\n", (int)app->selected_skin);
+    storage_file_write(file, buf, len);
+    storage_file_close(file);
+    storage_file_free(file);
+    furi_record_close(RECORD_STORAGE);
+}
+
+static void load_player_profile(GeoApp* app) {
+    const char* dir = "/ext/geoflip/player";
+    const char* path = "/ext/geoflip/player/profile.txt";
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    storage_simply_mkdir(storage, dir);
+    File* file = storage_file_alloc(storage);
+    if(!storage_file_open(file, path, FSAM_READ, FSOM_OPEN_EXISTING)) {
+        /* create default file */
+        storage_file_free(file);
+        furi_record_close(RECORD_STORAGE);
+        save_player_profile(app);
+        return;
+    }
+    char buf[32] = {0};
+    int read = storage_file_read(file, buf, sizeof(buf)-1);
+    storage_file_close(file);
+    storage_file_free(file);
+    furi_record_close(RECORD_STORAGE);
+    if(read > 0) {
+        int v = atoi(buf);
+        if(v >= 0 && v < SKIN_COUNT) app->selected_skin = (int8_t)v;
+    }
 }
