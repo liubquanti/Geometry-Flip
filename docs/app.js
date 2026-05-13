@@ -782,11 +782,7 @@ async function showLevels() {
     setDirty(true);
     hideStartupOverlay();
   });
-
-  const spacer = document.createElement('div');
-  spacer.className = 'level-delete spacer';
   newRow.appendChild(newButton);
-  newRow.appendChild(spacer);
   el.levelsList.appendChild(newRow);
   if (!levels.length) {
     const empty = document.createElement('div');
