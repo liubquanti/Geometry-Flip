@@ -1485,6 +1485,24 @@ int32_t geoflip(void* p) {
             app->menu_cube_skin = (int8_t)(rand() % SKIN_COUNT);
         }
 
+        if(app->state == GAMESTATE_MENU && prev_state != GAMESTATE_MENU) {
+            /* refresh custom levels list on entry */
+            app->level_count = (int8_t)discover_levels(app->level_files, MAX_LEVELS);
+            for(int i = 0; i < app->level_count; i++) {
+                Level* tmp = malloc(sizeof(Level));
+                if(tmp && parse_level(app->level_files[i], tmp)) {
+                    strncpy(app->level_names[i], tmp->name, 63);
+                } else {
+                    const char* sl = strrchr(app->level_files[i], '/');
+                    strncpy(app->level_names[i], sl ? sl+1 : app->level_files[i], 63);
+                }
+                app->level_names[i][63] = '\0';
+                if(tmp) free(tmp);
+            }
+            /* keep cursor in bounds */
+            if(app->custom_sel >= app->level_count) app->custom_sel = 0;
+        }
+
         if(app->state == GAMESTATE_MAINMENU) {
             app->menu_cam_x += SCROLL_SPEED;
             app->menu_cube_timer++;
