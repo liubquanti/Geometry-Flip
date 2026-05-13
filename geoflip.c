@@ -1089,54 +1089,61 @@ static void render_callback(Canvas* canvas, void* ctx) {
         return;
     }
 
-    /* ─── SKIN SELECT ─── */
+    /* ─── SKIN SELECT (CAROUSEL with 5 icons) ─── */
     if(app->state == GAMESTATE_SKINS) {
         canvas_set_font(canvas, FontPrimary);
         canvas_draw_str(canvas, 22, 8, "CHOOSE CUBE");
-        /* draw centered card */
-        const int card_x = 18;
-        const int card_y = 14;
-        const int card_w = SCREEN_W - 36;
-        const int card_h = SCREEN_H - 30;
-        canvas_set_color(canvas, ColorBlack);
-        canvas_draw_rbox(canvas, card_x, card_y, card_w, card_h, 3);
-        canvas_set_color(canvas, ColorWhite);
-        canvas_draw_rbox(canvas, card_x + 1, card_y + 1, card_w - 2, card_h - 2, 2);
-        canvas_set_color(canvas, ColorBlack);
-        canvas_draw_rbox(canvas, card_x + 2, card_y + 2, card_w - 4, card_h - 4, 2);
-        canvas_set_color(canvas, ColorWhite);
-        canvas_draw_rbox(canvas, card_x + 3, card_y + 3, card_w - 6, card_h - 6, 1);
-        /* layout 2x2 icons centered */
+        
+        /* carousel: show 5 icons (left-far, left, center-selected, right, right-far) */
         const int icon_w = 8, icon_h = 8;
-        const int cols = 2;
-        const int spacing = 16;
-        int start_x = card_x + (card_w - (cols * icon_w + (cols-1) * spacing)) / 2;
-        int start_y = card_y + 18;
-        for(int idx = 0; idx < SKIN_COUNT; idx++) {
-            int col = idx % cols;
-            int row = idx / cols;
-            int sx = start_x + col * (icon_w + spacing);
-            int sy = start_y + row * (icon_h + spacing);
-            /* highlight */
-            if(app->skin_cursor == idx) {
+        const int center_y = SCREEN_H / 2 - icon_h / 2;  /* vertically centered */
+        const int icon_spacing = 24;
+        
+        /* calculate icon indices for carousel display (5 icons total) */
+        int indices[5];
+        for(int i = 0; i < 5; i++) {
+            indices[i] = (app->skin_cursor - 2 + i + SKIN_COUNT * 10) % SKIN_COUNT;
+        }
+        
+        /* center icon position is at i=2 */
+        int center_x_pos = 10 + 2 * icon_spacing;
+        
+        /* draw 5 icons in a row */
+        for(int i = 0; i < 5; i++) {
+            int icon_idx = indices[i];
+            int x_pos = 10 + i * icon_spacing;
+            
+            /* skip if outside screen bounds */
+            if(x_pos + icon_w > SCREEN_W) continue;
+            
+            canvas_set_color(canvas, ColorBlack);
+            const uint8_t* bmp = SKINS[icon_idx];
+            
+            /* highlight center icon with box */
+            if(i == 2) {  /* center position */
                 canvas_set_color(canvas, ColorBlack);
-                canvas_draw_rbox(canvas, sx - 4, sy - 4, icon_w + 8, icon_h + 8, 2);
+                canvas_draw_rbox(canvas, x_pos - 5, center_y - 5, icon_w + 10, icon_h + 10, 2);
                 canvas_set_color(canvas, ColorWhite);
+                canvas_draw_rbox(canvas, x_pos - 4, center_y - 4, icon_w + 8, icon_h + 8, 1);
+                canvas_set_color(canvas, ColorBlack);
             }
-            /* draw 8x8 bitmap */
-            const uint8_t* bmp = SKINS[idx];
+            
             for(int y = 0; y < icon_h; y++) {
                 uint8_t rowbits = bmp[y];
                 for(int x = 0; x < icon_w; x++) {
                     if(rowbits & (1 << (7 - x))) {
-                        canvas_draw_box(canvas, sx + x, sy + y, 1, 1);
+                        canvas_draw_box(canvas, x_pos + x, center_y + y, 1, 1);
                     }
                 }
             }
         }
-        /* hint */
-        canvas_set_font(canvas, FontSecondary);
-        canvas_draw_str(canvas, 18, SCREEN_H - 12, "Left/Right/Up/Down: Move  OK: Select  Back: Cancel");
+        
+        /* draw left/right arrow icons next to center card */
+        canvas_set_color(canvas, ColorBlack);
+        int arrow_y = center_y;  /* align to center of icon */
+        canvas_draw_icon(canvas, center_x_pos - 12, arrow_y, &I_button_left);
+        canvas_draw_icon(canvas, center_x_pos + icon_w + 8, arrow_y, &I_button_right);
+        
         return;
     }
 
@@ -1404,13 +1411,6 @@ int32_t geoflip(void* p) {
                 }
                 if(pressed && ev.key == InputKeyRight) {
                     app->skin_cursor = (int8_t)((app->skin_cursor + 1) % SKIN_COUNT);
-                }
-                if(pressed && ev.key == InputKeyUp) {
-                    /* move -2 to go up a row in 2xN layout */
-                    app->skin_cursor = (int8_t)((app->skin_cursor - 2 + SKIN_COUNT) % SKIN_COUNT);
-                }
-                if(pressed && ev.key == InputKeyDown) {
-                    app->skin_cursor = (int8_t)((app->skin_cursor + 2) % SKIN_COUNT);
                 }
                 if(pressed && ev.key == InputKeyOk) {
                     app->selected_skin = app->skin_cursor;
