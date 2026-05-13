@@ -6,6 +6,11 @@
   --border: 2px;
 }
 
+@font-face {
+    font-family: HaxrCorp;
+    src: url("fonts/haxrcorp.otf") format("opentype");
+}
+
 * {
   box-sizing: border-box;
 }
@@ -18,7 +23,91 @@ body {
   background: var(--black);
   color: var(--orange);
   overflow: hidden;
-  font-family: "Courier New", ui-monospace, monospace;
+  font-family: "HaxrCorp", "Courier New", ui-monospace, monospace;
+}
+
+.startup-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.startup-overlay.hidden {
+  display: none;
+}
+
+.startup-card {
+  width: min(560px, 92vw);
+  border: 2px solid var(--orange);
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: var(--black);
+}
+
+.startup-card h1 {
+  margin: 0;
+  font-size: 30px;
+  letter-spacing: 0.2em;
+}
+
+.startup-card p {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: 0.12em;
+}
+
+.startup-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.startup-actions button {
+  height: 38px;
+}
+
+.levels-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.levels-title {
+  font-size: 22px;
+  letter-spacing: 0.14em;
+}
+
+.levels-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.level-row {
+  display: grid;
+  grid-template-columns: 1fr 96px;
+  gap: 8px;
+  align-items: center;
+}
+
+.level-name {
+  width: 100%;
+  text-align: left;
+}
+
+.level-row > .level-name:only-child {
+  grid-column: 1 / -1;
+}
+
+.level-delete {
+  white-space: nowrap;
+  min-width: 96px;
 }
 
 button,
@@ -61,12 +150,12 @@ select {
 }
 
 .brand {
-  font-size: 20px;
+  font-size: 30px;
   font-weight: 700;
 }
 
 .subtitle {
-  font-size: 12px;
+  font-size: 22px;
   border-top: 1px solid var(--orange);
   padding-top: 6px;
 }
@@ -85,7 +174,7 @@ select {
 }
 
 .field span {
-  font-size: 11px;
+  font-size: 21px;
   letter-spacing: 0.12em;
 }
 
@@ -194,7 +283,7 @@ input[type="range"]::-moz-range-progress {
 }
 
 .actions-title {
-  font-size: 11px;
+  font-size: 21px;
   letter-spacing: 0.12em;
 }
 
@@ -209,6 +298,16 @@ input[type="range"]::-moz-range-progress {
   justify-content: flex-end;
   flex-wrap: wrap;
   height: 38px;
+}
+
+.save-status {
+  border: 2px solid var(--orange);
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 button {
@@ -260,7 +359,7 @@ button.active {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 12px;
+  font-size: 22px;
   letter-spacing: 0.14em;
 }
 
@@ -277,7 +376,7 @@ button.active {
 
 .palette button small {
   display: block;
-  font-size: 10px;
+  font-size: 20px;
   letter-spacing: 0.08em;
   opacity: 1;
 }

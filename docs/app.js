@@ -28,6 +28,13 @@ const el = {
   fileInput: document.getElementById('fileInput'),
   palette: document.getElementById('palette'),
   selectionInfo: document.getElementById('selectionInfo'),
+  startupOverlay: document.getElementById('startupOverlay'),
+  startupMessage: document.getElementById('startupMessage'),
+  connectBtn: document.getElementById('connectBtn'),
+  offlineBtn: document.getElementById('offlineBtn'),
+  levelsPanel: document.getElementById('levelsPanel'),
+  levelsList: document.getElementById('levelsList'),
+  saveStatus: document.getElementById('saveStatus'),
 };
 
 const ctx = el.canvas.getContext('2d');
@@ -51,6 +58,9 @@ const state = {
   fileName: 'untitled.gdlvl',
   undoStack: [],
   redoStack: [],
+  autosaveTimer: null,
+  isConnected: false,
+  hasFlipperFile: false,
 };
 
 function cell() { return GRID * (state.zoom || 1); }
@@ -79,6 +89,35 @@ function resizeCanvas() {
 function setDirty(value = true) {
   state.dirty = value;
   document.title = `${value ? '* ' : ''}Geometry Flip Level Editor`;
+  if (value) requestAutoSave();
+  if (!value && state.autosaveTimer) {
+    clearTimeout(state.autosaveTimer);
+    state.autosaveTimer = null;
+  }
+}
+
+function requestAutoSave() {
+  if (!state.isConnected) return;
+  setSaveIndicator('SAVING...');
+  if (state.autosaveTimer) clearTimeout(state.autosaveTimer);
+  state.autosaveTimer = setTimeout(() => {
+    if (state.dirty) saveToFlipper();
+  }, 1000);
+}
+
+function updateSaveUI() {
+  if (state.isConnected) {
+    el.saveBtn.hidden = true;
+    el.saveStatus.hidden = false;
+  } else {
+    el.saveBtn.hidden = false;
+    el.saveStatus.hidden = true;
+  }
+}
+
+function setSaveIndicator(text) {
+  if (!state.isConnected) return;
+  el.saveStatus.textContent = text;
 }
 
 function clamp(v, min, max) {
@@ -369,6 +408,7 @@ function applyLevelToUI() {
 function setLevel(level, fileName = 'untitled.gdlvl') {
   state.level = level;
   state.fileName = fileName;
+  state.hasFlipperFile = false;
   state.cameraX = 0;
   state.cameraY = 0;
   state.dirty = false;
@@ -440,6 +480,11 @@ function serializeLevel(level) {
   return lines.join('\n') + '\n';
 }
 
+function buildFileName(name) {
+  const base = (name || 'untitled').trim() || 'untitled';
+  return `${base.replace(/[^a-z0-9_\- ]/gi, '_')}.gdlvl`;
+}
+
 let flipperPort = null;
 let flipperWriter = null;
 let flipperReader = null;
@@ -466,6 +511,9 @@ async function connectFlipper() {
   await sleep(1000);
 
   await flushSerial();
+  state.isConnected = true;
+  updateSaveUI();
+  setSaveIndicator('SAVED');
 }
 
 async function disconnectFlipper() {
@@ -488,6 +536,8 @@ async function disconnectFlipper() {
   } catch (e) {
     console.error(e);
   }
+  state.isConnected = false;
+  updateSaveUI();
 }
 
 function sleep(ms) {
@@ -574,21 +624,32 @@ function stringToHex(str) {
     .join('');
 }
 
-async function exportToFlipper() {
+async function saveToFlipper(showAlert = false) {
   try {
     await connectFlipper();
 
-    const fileName = `${state.level.name || 'untitled'}.gdlvl`;
-    const remotePath = `/ext/geoflip/levels/${fileName}`;
+    const targetFileName = buildFileName(state.level.name);
+    const targetPath = `/ext/geoflip/levels/${targetFileName}`;
     const content = serializeLevel(state.level);
+    let renamed = false;
 
     await execCLI('storage mkdir /ext/geoflip');
     await execCLI('storage mkdir /ext/geoflip/levels');
-    await execCLI(`storage remove "${remotePath}"`);
+    if (state.hasFlipperFile && state.fileName && state.fileName !== targetFileName) {
+      const oldPath = `/ext/geoflip/levels/${state.fileName}`;
+      await execCLI(`storage rename "${oldPath}" "${targetPath}"`);
+      state.fileName = targetFileName;
+      renamed = true;
+    } else {
+      state.fileName = targetFileName;
+    }
+    if (!renamed) {
+      await execCLI(`storage remove "${targetPath}"`);
+    }
 
     // Надсилаємо команду write (Flipper чекає дані після неї)
     await flushSerial();
-    await writeSerial(`storage write "${remotePath}"\r`);
+    await writeSerial(`storage write "${targetPath}"\r`);
 
     // Чекаємо поки Flipper надрукує підказку (зазвичай просто чекає введення)
     await sleep(500);
@@ -603,14 +664,171 @@ async function exportToFlipper() {
 
     await readUntilPrompt(5000);
 
-    alert(`Експортовано:\n${remotePath}`);
+    if (showAlert) {
+      alert(`Експортовано:\n${targetPath}`);
+    }
+    setDirty(false);
+    setSaveIndicator('SAVED');
+    state.hasFlipperFile = true;
 
   } catch (err) {
     console.error(err);
-    alert(err.message);
+    if (showAlert) alert(err.message);
+    if (!showAlert) setSaveIndicator('SAVE FAILED');
   } finally {
-    await disconnectFlipper();
+    if (showAlert) await disconnectFlipper();
   }
+}
+
+function stripPrompt(text) {
+  return text
+    .replace(/\r\n/g, '\n')
+    .replace(/>:\s*$/m, '')
+    .replace(/>\s*$/m, '')
+    .trim();
+}
+
+function parseLevelList(text) {
+  const cleaned = stripPrompt(text);
+  const lines = cleaned.split('\n').map((line) => line.trim());
+  const files = [];
+  for (const line of lines) {
+    if (!line) continue;
+    const fileMatch = line.match(/\[F\]\s+(.+?\.gdlvl)\b/i);
+    if (fileMatch) {
+      files.push(fileMatch[1]);
+      continue;
+    }
+    const looseMatch = line.match(/([^/\\]+?\.gdlvl)\b/i);
+    if (looseMatch) files.push(looseMatch[1]);
+  }
+  return files;
+}
+
+async function getLevelDisplayName(fileName) {
+  try {
+    const response = await execCLI(`storage read "/ext/geoflip/levels/${fileName}"`);
+    const cleaned = stripPrompt(response);
+    const level = parseLevel(cleaned);
+    return level.name || fileName.replace(/\.gdlvl$/i, '');
+  } catch (err) {
+    console.error(err);
+    return fileName.replace(/\.gdlvl$/i, '');
+  }
+}
+
+async function listLevels() {
+  try {
+    await connectFlipper();
+    await execCLI('storage mkdir /ext/geoflip');
+    await execCLI('storage mkdir /ext/geoflip/levels');
+    const response = await execCLI('storage list /ext/geoflip/levels');
+    const files = parseLevelList(response);
+    const entries = [];
+    for (const fileName of files) {
+      const label = await getLevelDisplayName(fileName);
+      entries.push({ fileName, label });
+    }
+    return entries;
+  } catch (err) {
+    console.error(err);
+    return [];
+  }
+}
+
+async function loadLevelFromFlipper(fileName) {
+  try {
+    await connectFlipper();
+    const response = await execCLI(`storage read "/ext/geoflip/levels/${fileName}"`);
+    const cleaned = stripPrompt(response);
+    const level = parseLevel(cleaned);
+    setLevel(level, fileName);
+    state.hasFlipperFile = true;
+    setSaveIndicator('SAVED');
+    hideStartupOverlay();
+  } catch (err) {
+    console.error(err);
+    alert(err.message);
+  }
+}
+
+async function deleteLevelFromFlipper(fileName) {
+  try {
+    await connectFlipper();
+    await execCLI(`storage remove "/ext/geoflip/levels/${fileName}"`);
+    await showLevels();
+  } catch (err) {
+    console.error(err);
+    alert(err.message);
+  }
+}
+
+async function showLevels() {
+  el.levelsList.innerHTML = '';
+  const loading = document.createElement('div');
+  loading.textContent = 'Loading levels...';
+  el.levelsList.appendChild(loading);
+  const levels = await listLevels();
+  el.levelsList.innerHTML = '';
+  const newRow = document.createElement('div');
+  newRow.className = 'level-row';
+
+  const newButton = document.createElement('button');
+  newButton.type = 'button';
+  newButton.className = 'level-name';
+  newButton.textContent = 'NEW LEVEL';
+  newButton.addEventListener('click', () => {
+    setLevel(blankLevel(), 'untitled.gdlvl');
+    setDirty(true);
+    hideStartupOverlay();
+  });
+  newRow.appendChild(newButton);
+  el.levelsList.appendChild(newRow);
+  if (!levels.length) {
+    const empty = document.createElement('div');
+    empty.textContent = 'No levels found.';
+    el.levelsList.appendChild(empty);
+    return;
+  }
+  for (const entry of levels) {
+    const row = document.createElement('div');
+    row.className = 'level-row';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'level-name';
+    button.textContent = entry.label;
+    button.addEventListener('click', () => loadLevelFromFlipper(entry.fileName));
+
+    const delButton = document.createElement('button');
+    delButton.type = 'button';
+    delButton.className = 'level-delete';
+    delButton.textContent = 'DELETE';
+    delButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      deleteLevelFromFlipper(entry.fileName);
+    });
+
+    row.appendChild(button);
+    row.appendChild(delButton);
+    el.levelsList.appendChild(row);
+  }
+}
+
+function showStartupOverlay(message) {
+  if (message) el.startupMessage.textContent = message;
+  el.startupOverlay.classList.remove('hidden');
+  el.levelsPanel.hidden = true;
+}
+
+function showLevelPicker() {
+  el.startupMessage.textContent = 'Select a level or start a new one.';
+  el.levelsPanel.hidden = false;
+  showLevels();
+}
+
+function hideStartupOverlay() {
+  el.startupOverlay.classList.add('hidden');
 }
 
 function downloadLevel() {
@@ -700,7 +918,27 @@ el.fileInput.addEventListener('change', () => {
   if (file) loadFromFile(file);
 });
 
-el.saveBtn.addEventListener('click', exportToFlipper);
+el.connectBtn.addEventListener('click', async () => {
+  el.startupMessage.textContent = 'Connecting to Flipper...';
+  try {
+    await connectFlipper();
+    showLevelPicker();
+  } catch (err) {
+    console.error(err);
+    el.startupMessage.textContent = 'Failed to connect. Please try again.';
+  }
+});
+
+el.offlineBtn.addEventListener('click', () => {
+  state.isConnected = false;
+  updateSaveUI();
+  hideStartupOverlay();
+});
+
+
+el.saveBtn.addEventListener('click', () => {
+  if (!state.isConnected) downloadLevel();
+});
 
 el.levelName.addEventListener('input', syncInputsToLevel);
 el.bgStyle.addEventListener('change', syncInputsToLevel);
@@ -859,3 +1097,5 @@ createPalette();
 setLevel(blankLevel());
 resizeCanvas();
 requestAnimationFrame(renderLoop);
+showStartupOverlay('Please connect your Flipper to load levels.');
+updateSaveUI();
