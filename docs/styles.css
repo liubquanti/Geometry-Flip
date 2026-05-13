@@ -21,6 +21,92 @@ body {
   font-family: "Courier New", ui-monospace, monospace;
 }
 
+.startup-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.startup-overlay.hidden {
+  display: none;
+}
+
+.startup-card {
+  width: min(560px, 92vw);
+  border: 2px solid var(--orange);
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: var(--black);
+}
+
+.startup-card h1 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 0.2em;
+}
+
+.startup-card p {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+}
+
+.startup-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.startup-actions button {
+  height: 38px;
+}
+
+.levels-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.levels-title {
+  font-size: 12px;
+  letter-spacing: 0.14em;
+}
+
+.levels-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.level-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.level-name {
+  width: 100%;
+  text-align: left;
+}
+
+.level-delete {
+  white-space: nowrap;
+  min-width: 96px;
+}
+
+.level-delete.spacer {
+  border: none;
+  background: transparent;
+  min-width: 96px;
+}
+
 button,
 input,
 select {
@@ -209,6 +295,16 @@ input[type="range"]::-moz-range-progress {
   justify-content: flex-end;
   flex-wrap: wrap;
   height: 38px;
+}
+
+.save-status {
+  border: 2px solid var(--orange);
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 button {

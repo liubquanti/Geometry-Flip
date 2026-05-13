@@ -7,6 +7,21 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <div id="startupOverlay" class="startup-overlay" aria-live="polite">
+    <div class="startup-card">
+      <h1>CONNECT FLIPPER</h1>
+      <p id="startupMessage">Please connect your Flipper to load levels.</p>
+      <div class="startup-actions">
+        <button id="connectBtn" type="button">CONNECT</button>
+        <button id="offlineBtn" type="button">CONTINUE OFFLINE</button>
+      </div>
+      <div id="levelsPanel" class="levels-panel" hidden>
+        <div class="levels-title">Levels on Flipper</div>
+        <div id="levelsList" class="levels-list"></div>
+      </div>
+    </div>
+  </div>
+
   <div class="shell">
     <header class="panel top-panel">
       <div class="brand-block">
@@ -43,10 +58,11 @@
       <div class="actions">
         <div class="actions-title">Actions</div>
         <div class="actions-buttons">
-        <button id="newLevelBtn" type="button">NEW</button>
-        <button id="loadBtn" type="button">LOAD</button>
-        <button id="saveBtn" type="button">EXPORT</button>
-        <input id="fileInput" type="file" accept=".gdlvl,.txt" hidden />
+          <button id="newLevelBtn" type="button">NEW</button>
+          <button id="loadBtn" type="button">LOAD</button>
+          <button id="saveBtn" type="button">EXPORT</button>
+          <div id="saveStatus" class="save-status" hidden>SAVED</div>
+          <input id="fileInput" type="file" accept=".gdlvl,.txt" hidden />
         </div>
       </div>
     </header>
