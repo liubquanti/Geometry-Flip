@@ -951,7 +951,7 @@ static void render_callback(Canvas* canvas, void* ctx) {
     /* ─── MENU ─── */
     if(app->state == GAMESTATE_MENU) {
         canvas_set_font(canvas, FontPrimary);
-        canvas_draw_str(canvas, 18, 12, "CUSTOM LEVELS");
+        canvas_draw_str(canvas, 18, 10, "CUSTOM LEVELS");
         canvas_set_font(canvas, FontSecondary);
         if(app->level_count == 0) {
             canvas_draw_str(canvas, 8, 30, "No custom levels!");
@@ -960,14 +960,14 @@ static void render_callback(Canvas* canvas, void* ctx) {
         } else {
             const int ITEM_H    = 12;
             const int MAX_VIS   = 4;
-            const int Y_START   = 24;
+            const int Y_START   = 22;
             int scroll = 0;
             if(app->custom_sel >= MAX_VIS) scroll = (app->custom_sel - MAX_VIS + 1) * ITEM_H;
             for(int i = 0; i < app->level_count; i++) {
                 int y = Y_START + i * ITEM_H - scroll;
                 if(y < 20 || y > SCREEN_H - 2) continue;
                 if(i == app->custom_sel) {
-                    canvas_draw_rbox(canvas, 2, y-9, SCREEN_W-4, 11, 2);
+                    canvas_draw_rbox(canvas, 2, y-9, SCREEN_W-4, 12, 2);
                     canvas_set_color(canvas, ColorWhite);
                 }
                 canvas_draw_str(canvas, 8, y, app->level_names[i]);
@@ -1092,7 +1092,7 @@ static void render_callback(Canvas* canvas, void* ctx) {
     /* ─── SKIN SELECT (CAROUSEL with 5 icons) ─── */
     if(app->state == GAMESTATE_SKINS) {
         canvas_set_font(canvas, FontPrimary);
-        canvas_draw_str(canvas, 22, 8, "CHOOSE CUBE");
+        canvas_draw_str(canvas, 28, 10, "CHOOSE ICON");
         
         /* carousel: show 5 icons (left-far, left, center-selected, right, right-far) */
         const int icon_w = 8, icon_h = 8;
@@ -1155,7 +1155,7 @@ static void render_callback(Canvas* canvas, void* ctx) {
         const int cy = SCREEN_H/2;
         /* draw background title */
         canvas_set_font(canvas, FontPrimary);
-        canvas_draw_str(canvas, 21, 8, "GEOMETRY FLIP");
+        canvas_draw_str(canvas, 21, 10, "GEOMETRY FLIP");
 
         /* ground fill and moving cube hint (behind buttons) */
         canvas_set_color(canvas, ColorWhite);
