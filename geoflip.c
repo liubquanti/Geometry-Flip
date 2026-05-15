@@ -371,6 +371,7 @@ static bool parse_level_from_text(const char* text, Level* lvl) {
 }
 
 /* forward declarations for profile persistence */
+static void ensure_app_storage_dirs(void);
 static void save_player_profile(GeoApp* app);
 static void load_player_profile(GeoApp* app);
 
@@ -398,6 +399,18 @@ static int discover_levels(char files[][MAX_PATH_LEN], int max) {
     storage_file_free(dir);
     furi_record_close(RECORD_STORAGE);
     return count;
+}
+
+static void ensure_app_storage_dirs(void) {
+    const char* root_dir = "/ext/geoflip";
+    const char* levels_dir = "" LEVEL_DIR;
+    const char* player_dir = "/ext/geoflip/player";
+
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    storage_simply_mkdir(storage, root_dir);
+    storage_simply_mkdir(storage, levels_dir);
+    storage_simply_mkdir(storage, player_dir);
+    furi_record_close(RECORD_STORAGE);
 }
 
 /* ─── Collision ──────────────────────────────────────────────────── */
@@ -1364,6 +1377,9 @@ int32_t geoflip(void* p) {
     app->menu_cube_skin = 0;
 
     srand((unsigned)furi_get_tick());
+
+    /* make sure app directories exist before first read/write */
+    ensure_app_storage_dirs();
 
     /* load persisted player profile if present */
     load_player_profile(app);
