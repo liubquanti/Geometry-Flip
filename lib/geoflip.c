@@ -27,8 +27,8 @@
 #include <math.h>
 #include <stdio.h>
 
-#include "levels.h"
-#include "icons.h"
+#include "lib/data/levels.h"
+#include "lib/interface/icons.h"
 
 /* ─── Constants ─────────────────────────────────────────────────── */
 

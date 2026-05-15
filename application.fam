@@ -16,7 +16,7 @@ App(
     fap_description="Geometry Dash clone for Flipper Zero.",
     fap_author="liubquanti",
     sources=[
-        "geoflip.c",
-        "levels.c",
+        "lib/geoflip.c",
+        "lib/data/levels.c",
     ],
 )
