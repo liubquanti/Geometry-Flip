@@ -954,9 +954,13 @@ static void render_callback(Canvas* canvas, void* ctx) {
         canvas_draw_str(canvas, 18, 10, "CUSTOM LEVELS");
         canvas_set_font(canvas, FontSecondary);
         if(app->level_count == 0) {
-            canvas_draw_str(canvas, 8, 30, "No custom levels!");
-            canvas_draw_str(canvas, 8, 42, LEVEL_DIR);
-            canvas_draw_str(canvas, 8, 54, "Add .gdlvl files");
+            canvas_draw_str_aligned(
+                canvas,
+                SCREEN_W / 2,
+                SCREEN_H / 2,
+                AlignCenter,
+                AlignCenter,
+                "No custom levels found!");
         } else {
             const int ITEM_H    = 12;
             const int MAX_VIS   = 4;
@@ -1291,13 +1295,38 @@ static void render_callback(Canvas* canvas, void* ctx) {
 
     /* ─── WIN ─── */
     if(app->state == GAMESTATE_WIN) {
+        const int card_x = 21;
+        const int card_y = 17;
+        const int card_w = 86;
+        const int card_h = 30;
+        canvas_set_color(canvas, ColorBlack);
+        canvas_draw_rbox(canvas, card_x, card_y, card_w, card_h, 3);
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_rbox(canvas, card_x + 1, card_y + 1, card_w - 2, card_h - 2, 2);
+        canvas_set_color(canvas, ColorBlack);
+        canvas_draw_rbox(canvas, card_x + 2, card_y + 2, card_w - 4, card_h - 4, 2);
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_rbox(canvas, card_x + 3, card_y + 3, card_w - 6, card_h - 6, 1);
+        canvas_set_color(canvas, ColorBlack);
         canvas_set_font(canvas, FontPrimary);
-        canvas_draw_str(canvas, 30, 16, "LEVEL CLEAR!");
+        canvas_draw_str_aligned(
+            canvas,
+            card_x + card_w / 2,
+            card_y + 10,
+            AlignCenter,
+            AlignCenter,
+            "LEVEL CLEAR!");
         canvas_set_font(canvas, FontSecondary);
         char buf[32];
         snprintf(buf, sizeof(buf), "Attempts: %d", (int)app->attempt);
-        canvas_draw_str(canvas, 32, 34, buf);
-        canvas_draw_str(canvas, 16, 50, "OK=Levels  Back=Retry");
+        /* draw single centered line with label and number */
+        canvas_draw_str_aligned(
+            canvas,
+            card_x + card_w / 2,
+            card_y + 21,
+            AlignCenter,
+            AlignCenter,
+            buf);
     }
 }
 

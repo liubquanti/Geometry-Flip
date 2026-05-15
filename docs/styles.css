@@ -279,7 +279,6 @@ input[type="range"]::-moz-range-progress {
   align-items: stretch;
   gap: 6px;
   justify-content: flex-end;
-  min-width: 240px;
 }
 
 .actions-title {
@@ -295,7 +294,6 @@ input[type="range"]::-moz-range-progress {
   display: flex;
   gap: 8px;
   align-items: center;
-  justify-content: flex-end;
   flex-wrap: wrap;
   height: 38px;
 }
