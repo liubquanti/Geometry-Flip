@@ -165,6 +165,7 @@ typedef struct {
     /* customization */
     int8_t  selected_skin; /* index of chosen skin */
     int8_t  skin_cursor;   /* UI cursor while selecting */
+    int8_t* official_prog; /* pointer to saved progress percent per official level (0-100) */
 
     bool    current_is_official;
     int8_t  current_level_idx;
@@ -374,6 +375,8 @@ static bool parse_level_from_text(const char* text, Level* lvl) {
 static void ensure_app_storage_dirs(void);
 static void save_player_profile(GeoApp* app);
 static void load_player_profile(GeoApp* app);
+static void save_official_progress(GeoApp* app);
+static void load_official_progress(GeoApp* app);
 
 /* ─── Level Discovery ────────────────────────────────────────────── */
 
@@ -520,7 +523,16 @@ static void game_begin_death(GeoApp* app) {
     int p = game_pct(app);
     app->dead_pct      = (int8_t)p;
     app->dead_new_best = (p > app->best_pct);
-    if(app->dead_new_best) app->best_pct = (int16_t)p;
+    if(app->dead_new_best) {
+        app->best_pct = (int16_t)p;
+        /* If this was an official level, update saved progression */
+        if(app->current_is_official && app->current_level_idx >= 0 && app->current_level_idx < OFFICIAL_LEVEL_COUNT) {
+            if(app->official_prog[app->current_level_idx] < (int8_t)p) {
+                app->official_prog[app->current_level_idx] = (int8_t)p;
+                save_official_progress(app);
+            }
+        }
+    }
     app->dead_timer    = 0;
     death_particles_spawn(app);
     app->state         = GAMESTATE_DEAD;
@@ -609,20 +621,6 @@ static void game_update(GeoApp* app) {
         if(o->type == OBJ_BLOCK) {
             /* Explicit stick-to-block logic: if player is very close to block top,
                snap them onto it (helps with seamless multi-block traversal) */
-            int player_bottom = (int)app->py + PLAYER_SIZE;
-            int block_top     = sy;
-            if(!app->on_ground && app->vy >= 0.0f && 
-               player_bottom > block_top - 2 && player_bottom < block_top + 4 &&
-               px_hit + pw_hit > sx && px_hit < sx + CELL) {
-                app->py        = (float)(sy - PLAYER_SIZE);
-                app->vy        = 0.0f;
-                app->on_ground = true;
-                app->angle     = nearest_90(app->angle);
-                app->snapping  = false;
-                app->landed_on_block = true;
-                app->lock_angle = 6;
-                continue;  /* skip normal collision for this block */
-            }
 
             if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit, sx, sy, CELL, CELL)) {
                 bool from_above = (int)app->prev_py + PLAYER_SIZE <= sy + 2;
@@ -755,6 +753,13 @@ static void game_update(GeoApp* app) {
     /* ── win ── */
     if(app->cam_x >= app->level.length) {
         if(100 > app->best_pct) app->best_pct = 100;
+        /* If an official level was completed, mark progress as 100% and save */
+        if(app->current_is_official && app->current_level_idx >= 0 && app->current_level_idx < OFFICIAL_LEVEL_COUNT) {
+            if(app->official_prog[app->current_level_idx] < 100) {
+                app->official_prog[app->current_level_idx] = 100;
+                save_official_progress(app);
+            }
+        }
         app->state = GAMESTATE_WIN;
     }
 }
@@ -1294,6 +1299,27 @@ static void render_callback(Canvas* canvas, void* ctx) {
                 AlignCenter,
                 AlignCenter,
                 name);
+            /* draw progress bar under the name using saved official progress */
+            int prog = 0;
+            if(idx >= 0 && idx < OFFICIAL_LEVEL_COUNT && app->official_prog) {
+                prog = app->official_prog[idx];
+                if(prog < 0) prog = 0;
+                if(prog > 100) prog = 100;
+            }
+            const int pb_x = 21;
+            const int pb_w = 86;
+            const int pb_h = 4;
+            const int pb_y = SCREEN_H / 2 + 8;
+            /* draw 1px border (black), white background, then filled portion */
+            canvas_set_color(canvas, ColorBlack);
+            canvas_draw_box(canvas, pb_x, pb_y, pb_w, pb_h); /* border */
+            canvas_set_color(canvas, ColorWhite);
+            canvas_draw_box(canvas, pb_x + 1, pb_y + 1, pb_w - 2, pb_h - 2); /* background */
+            int fill_w = (prog * (pb_w - 2)) / 100;
+            if(fill_w > 0) {
+                canvas_set_color(canvas, ColorBlack);
+                canvas_draw_box(canvas, pb_x + 1, pb_y + 1, fill_w, pb_h - 2); /* filled */
+            }
         } else {
             canvas_draw_str_aligned(
                 canvas,
@@ -1376,6 +1402,12 @@ int32_t geoflip(void* p) {
     app->menu_cube_on_ground = true;
     app->menu_cube_skin = 0;
 
+    /* allocate official progress array */
+    if(OFFICIAL_LEVEL_COUNT > 0) {
+        app->official_prog = malloc(sizeof(int8_t) * OFFICIAL_LEVEL_COUNT);
+        if(app->official_prog) memset(app->official_prog, 0, sizeof(int8_t) * OFFICIAL_LEVEL_COUNT);
+    } else app->official_prog = NULL;
+
     srand((unsigned)furi_get_tick());
 
     /* make sure app directories exist before first read/write */
@@ -1383,6 +1415,8 @@ int32_t geoflip(void* p) {
 
     /* load persisted player profile if present */
     load_player_profile(app);
+    /* load official-level progression (percent per level) */
+    load_official_progress(app);
 
     app->level_count = (int8_t)discover_levels(app->level_files, MAX_LEVELS);
     for(int i = 0; i < app->level_count; i++) {
@@ -1604,6 +1638,8 @@ int32_t geoflip(void* p) {
     furi_record_close(RECORD_NOTIFICATION);
     /* ensure profile saved on exit */
     save_player_profile(app);
+    /* free official progress array */
+    if(app->official_prog) free(app->official_prog);
     free(app);
     return 0;
 }
@@ -1656,5 +1692,94 @@ static void load_player_profile(GeoApp* app) {
     if(read > 0) {
         int v = atoi(buf);
         if(v >= 0 && v < SKIN_COUNT) app->selected_skin = (int8_t)v;
+    }
+}
+
+/* ─── Official progression persistence ───────────────────────────── */
+static void save_official_progress(GeoApp* app) {
+    const char* dir = "/ext/geoflip/player";
+    const char* path = "/ext/geoflip/player/ofprog.txt";
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    storage_simply_mkdir(storage, dir);
+    File* file = storage_file_alloc(storage);
+    /* Try opening existing file for write first, otherwise create/truncate */
+    if(!storage_file_open(file, path, FSAM_WRITE, FSOM_OPEN_EXISTING)) {
+        storage_file_close(file);
+        storage_file_free(file);
+        file = storage_file_alloc(storage);
+        if(!storage_file_open(file, path, FSAM_WRITE, FSOM_CREATE_NEW)) {
+            storage_file_free(file);
+            furi_record_close(RECORD_STORAGE);
+            return;
+        }
+    }
+    /* Serialize as lines: ID = value\n */
+    for(int i = 0; i < OFFICIAL_LEVEL_COUNT; i++) {
+        const char* id = OFFICIAL_LEVELS[i].id ? OFFICIAL_LEVELS[i].id : OFFICIAL_LEVELS[i].name;
+        char line[64];
+        int len = snprintf(line, sizeof(line), "%s = %d\n", id, app->official_prog ? (int)app->official_prog[i] : 0);
+        if(len > 0) storage_file_write(file, line, len);
+    }
+    storage_file_close(file);
+    storage_file_free(file);
+    furi_record_close(RECORD_STORAGE);
+}
+
+static void load_official_progress(GeoApp* app) {
+    const char* dir = "/ext/geoflip/player";
+    const char* path = "/ext/geoflip/player/ofprog.txt";
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    storage_simply_mkdir(storage, dir);
+    File* file = storage_file_alloc(storage);
+    if(!storage_file_open(file, path, FSAM_READ, FSOM_OPEN_EXISTING)) {
+        /* create default (zeros) */
+        storage_file_free(file);
+        furi_record_close(RECORD_STORAGE);
+        /* ensure default saved file exists */
+        save_official_progress(app);
+        return;
+    }
+    char buf[256] = {0};
+    int read = storage_file_read(file, buf, sizeof(buf)-1);
+    storage_file_close(file);
+    storage_file_free(file);
+    furi_record_close(RECORD_STORAGE);
+    if(read <= 0) return;
+    /* parse lines of form: ID = value  (ignore unknown IDs) */
+    char* p = buf;
+    while(p && *p) {
+        char* nl = strchr(p, '\n');
+        if(nl) *nl = '\0';
+        char* l = p;
+        /* trim leading whitespace */
+        while(*l == ' ' || *l == '\r' || *l == '\t') l++;
+        if(*l != '\0' && *l != '#') {
+            char* eq = strchr(l, '=');
+            if(eq) {
+                *eq = '\0';
+                char* key = l;
+                char* valstr = eq + 1;
+                while(*key == ' ' || *key == '\t') key++;
+                char* kend = key + strlen(key) - 1;
+                while(kend > key && (*kend == ' ' || *kend == '\t')) { *kend = '\0'; kend--; }
+                while(*valstr == ' ' || *valstr == '\t') valstr++;
+                int v = atoi(valstr);
+                if(v < 0) v = 0;
+                if(v > 100) v = 100;
+                for(int i = 0; i < OFFICIAL_LEVEL_COUNT; i++) {
+                    const char* id = OFFICIAL_LEVELS[i].id ? OFFICIAL_LEVELS[i].id : OFFICIAL_LEVELS[i].name;
+                    if(id && strcmp(id, key) == 0) {
+                        if(app->official_prog) app->official_prog[i] = (int8_t)v;
+                        break;
+                    }
+                }
+            }
+        }
+        if(!nl) break;
+        p = nl + 1;
+    }
+    /* ensure any unspecified entries are zeroed */
+    for(int i = 0; i < OFFICIAL_LEVEL_COUNT; i++) if(app->official_prog) {
+        if(app->official_prog[i] < 0 || app->official_prog[i] > 100) app->official_prog[i] = 0;
     }
 }

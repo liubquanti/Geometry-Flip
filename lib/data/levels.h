@@ -3,6 +3,7 @@
 typedef struct {
     const char* name;
     const char* data;
+    const char* id; /* stable identifier for persistence */
 } EmbeddedLevel;
 
 extern const EmbeddedLevel OFFICIAL_LEVELS[];
