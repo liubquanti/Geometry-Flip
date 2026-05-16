@@ -553,6 +553,15 @@ static void game_start_official_level(GeoApp* app, int idx) {
     if(!parse_level_from_text(OFFICIAL_LEVELS[idx].data, &app->level)) return;
     app->current_is_official = true;
     app->current_level_idx = (int8_t)idx;
+    /* initialize best_pct from saved official progression so NEW BEST compares correctly */
+    if(app->official_prog && idx >= 0 && idx < OFFICIAL_LEVEL_COUNT) {
+        int v = (int)app->official_prog[idx];
+        if(v < 0) v = 0;
+        if(v > 100) v = 100;
+        app->best_pct = (int16_t)v;
+    } else {
+        app->best_pct = 0;
+    }
     app->attempt++;
     game_reset(app);
     app->state = GAMESTATE_PLAYING;
