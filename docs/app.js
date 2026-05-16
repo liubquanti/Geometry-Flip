@@ -31,12 +31,21 @@ const el = {
   startupOverlay: document.getElementById('startupOverlay'),
   startupMessage: document.getElementById('startupMessage'),
   startupActions: document.querySelector('.startup-actions'),
+  startupTitle: document.getElementById('startupTitle'),
   connectBtn: document.getElementById('connectBtn'),
   offlineBtn: document.getElementById('offlineBtn'),
   levelsPanel: document.getElementById('levelsPanel'),
   levelsList: document.getElementById('levelsList'),
   saveIcon: document.getElementById('saveIcon'),
   exitBtn: document.getElementById('exitBtn'),
+  iconEditorBtn: document.getElementById('iconEditorBtn'),
+  iconEditorPanel: document.getElementById('iconEditorPanel'),
+  iconCanvas: document.getElementById('iconCanvas'),
+  iconClear: document.getElementById('iconClear'),
+  iconInvert: document.getElementById('iconInvert'),
+  iconCopy: document.getElementById('iconCopy'),
+  iconCode: document.getElementById('iconCode'),
+  iconClose: document.getElementById('iconClose'),
 };
 
 const ctx = el.canvas.getContext('2d');
@@ -1132,3 +1141,140 @@ requestAnimationFrame(renderLoop);
 showStartupOverlay('Please connect your Flipper to load levels.');
 updateSaveUI();
 setSavingIcon(false);
+
+/* ---------------- Icon editor ---------------- */
+const iconCtx = el.iconCanvas && el.iconCanvas.getContext('2d');
+const ICON_SIZE = 8;
+const ICON_SCALE = Math.floor((el.iconCanvas ? el.iconCanvas.width : 128) / ICON_SIZE);
+const iconState = { pixels: new Array(ICON_SIZE).fill(0).map(() => new Array(ICON_SIZE).fill(0)), drawing: false };
+
+function iconCellSize() {
+  if (!el.iconCanvas) return 1;
+  const rect = el.iconCanvas.getBoundingClientRect();
+  return Math.max(1, Math.floor(Math.min(rect.width, rect.height) / ICON_SIZE));
+}
+
+function renderIcon() {
+  if (!iconCtx) return;
+  iconCtx.fillStyle = BLACK;
+  iconCtx.fillRect(0, 0, el.iconCanvas.width, el.iconCanvas.height);
+  // draw pixels
+  for (let y = 0; y < ICON_SIZE; y++) {
+    for (let x = 0; x < ICON_SIZE; x++) {
+      if (iconState.pixels[y][x]) {
+        iconCtx.fillStyle = ORANGE;
+        iconCtx.fillRect(x * ICON_SCALE, y * ICON_SCALE, ICON_SCALE, ICON_SCALE);
+      } else {
+        iconCtx.fillStyle = BLACK;
+        iconCtx.fillRect(x * ICON_SCALE, y * ICON_SCALE, ICON_SCALE, ICON_SCALE);
+      }
+    }
+  }
+  // grid
+  iconCtx.strokeStyle = ORANGE;
+  iconCtx.lineWidth = 1;
+  for (let i = 0; i <= ICON_SIZE; i++) {
+    iconCtx.beginPath();
+    iconCtx.moveTo(i * ICON_SCALE + 0.5, 0);
+    iconCtx.lineTo(i * ICON_SCALE + 0.5, el.iconCanvas.height);
+    iconCtx.stroke();
+    iconCtx.beginPath();
+    iconCtx.moveTo(0, i * ICON_SCALE + 0.5);
+    iconCtx.lineTo(el.iconCanvas.width, i * ICON_SCALE + 0.5);
+    iconCtx.stroke();
+  }
+}
+
+function iconCanvasCoords(clientX, clientY) {
+  const rect = el.iconCanvas.getBoundingClientRect();
+  const scale = iconCellSize();
+  const x = Math.floor((clientX - rect.left) / scale);
+  const y = Math.floor((clientY - rect.top) / scale);
+  return { x: clamp(x, 0, ICON_SIZE - 1), y: clamp(y, 0, ICON_SIZE - 1) };
+}
+
+function toggleIconPixelAt(clientX, clientY, setTo) {
+  const { x, y } = iconCanvasCoords(clientX, clientY);
+  if (typeof setTo === 'boolean') iconState.pixels[y][x] = setTo ? 1 : 0;
+  else iconState.pixels[y][x] = iconState.pixels[y][x] ? 0 : 1;
+  renderIcon();
+  updateIconCode();
+}
+
+function clearIcon() {
+  for (let y = 0; y < ICON_SIZE; y++) for (let x = 0; x < ICON_SIZE; x++) iconState.pixels[y][x] = 0;
+  renderIcon();
+  updateIconCode();
+}
+
+function invertIcon() {
+  for (let y = 0; y < ICON_SIZE; y++) for (let x = 0; x < ICON_SIZE; x++) iconState.pixels[y][x] = iconState.pixels[y][x] ? 0 : 1;
+  renderIcon();
+  updateIconCode();
+}
+
+function updateIconCode() {
+  // Each row -> byte, bit7 = leftmost
+  const bytes = [];
+  for (let y = 0; y < ICON_SIZE; y++) {
+    let v = 0;
+    for (let x = 0; x < ICON_SIZE; x++) {
+      v = (v << 1) | (iconState.pixels[y][x] ? 1 : 0);
+    }
+    bytes.push('0x' + v.toString(16).toUpperCase().padStart(2, '0'));
+  }
+  const code = `{ ${bytes.join(', ')} }`;
+  if (el.iconCode) el.iconCode.textContent = code;
+  return code;
+}
+
+function showIconEditor() {
+  el.iconEditorPanel.hidden = false;
+  el.levelsPanel.hidden = true;
+  if (el.startupActions) el.startupActions.hidden = true;
+  if (el.startupTitle) el.startupTitle.textContent = 'ICON EDITOR';
+  if (el.startupMessage) el.startupMessage.textContent = 'Here you can draw a game icon.';
+  renderIcon();
+  updateIconCode();
+}
+
+function closeIconEditor() {
+  el.iconEditorPanel.hidden = true;
+  if (el.startupActions) el.startupActions.hidden = false;
+  if (el.startupTitle) el.startupTitle.textContent = 'LEVEL EDITOR';
+  if (el.startupMessage) el.startupMessage.textContent = 'Please connect your Flipper to load levels.';
+}
+
+if (el.iconEditorBtn) el.iconEditorBtn.addEventListener('click', () => {
+  showIconEditor();
+});
+
+if (el.iconClose) el.iconClose.addEventListener('click', () => {
+  closeIconEditor();
+});
+
+if (el.iconCanvas) {
+  el.iconCanvas.addEventListener('pointerdown', (ev) => {
+    el.iconCanvas.setPointerCapture(ev.pointerId);
+    iconState.drawing = true;
+    toggleIconPixelAt(ev.clientX, ev.clientY, ev.button === 2 ? false : true);
+  });
+  el.iconCanvas.addEventListener('pointermove', (ev) => {
+    if (!iconState.drawing) return;
+    toggleIconPixelAt(ev.clientX, ev.clientY, ev.buttons === 2 ? false : true);
+  });
+  el.iconCanvas.addEventListener('pointerup', (ev) => {
+    iconState.drawing = false;
+  });
+  el.iconCanvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
+}
+
+if (el.iconClear) el.iconClear.addEventListener('click', clearIcon);
+if (el.iconInvert) el.iconInvert.addEventListener('click', invertIcon);
+if (el.iconCopy) el.iconCopy.addEventListener('click', async () => {
+  const code = updateIconCode();
+  try { await navigator.clipboard.writeText(code); } catch (e) { console.error(e); }
+});
+
+// initialize icon canvas
+clearIcon();

@@ -28,6 +28,7 @@
 #include <stdio.h>
 
 #include "lib/data/levels.h"
+#include "lib/data/skins.h"
 #include "lib/interface/icons.h"
 
 /* ─── Constants ─────────────────────────────────────────────────── */
@@ -194,14 +195,7 @@ static int icos128(int deg) { return isin128(deg + 90); }
 
 /* ─── Draw rotated cube ──────────────────────────────────────────── */
 
-/* Built-in 8x8 skins: 1 = black(+), 0 = white(-) */
-static const int SKIN_COUNT = 4;
-static const uint8_t SKINS[4][8] = {
-    { 0xFF, 0x81, 0xA5, 0xA5, 0x81, 0xBD, 0x81, 0xFF },
-    { 0xFF, 0x81, 0xBD, 0xA5, 0xA5, 0xBD, 0x81, 0xFF },
-    { 0xFF, 0xC3, 0xA5, 0x99, 0x99, 0xA5, 0xC3, 0xFF },
-    { 0xFF, 0xCF, 0xC9, 0xF9, 0x9F, 0x93, 0xF3, 0xFF },
-};
+/* Player skins moved to lib/interface/skins.{h,c} */
 
 static void draw_player_rotated(Canvas* canvas, int cx, int cy, float angle_f, int skin) {
     int ang = (int)angle_f;

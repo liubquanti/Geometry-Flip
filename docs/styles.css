@@ -68,6 +68,14 @@ body {
   flex-wrap: wrap;
 }
 
+.icon-editor-prompt {
+  flex-basis: 100%;
+  font-size: 20px;
+  letter-spacing: 0.12em;
+  line-height: 1.1;
+  margin: 2px 0 -2px;
+}
+
 .startup-or {
   flex-basis: 100%;
   text-align: left;
@@ -80,6 +88,11 @@ body {
 #connectBtn,
 #offlineBtn {
   flex-basis: 100%;
+}
+
+#iconEditorBtn {
+  flex-basis: 100%;
+  width: 100%;
 }
 
 .startup-actions button {
@@ -124,10 +137,65 @@ body {
   min-width: 96px;
 }
 
+.icon-editor {
+  display: flex;
+  justify-content: center;
+  padding-top: 4px;
+}
+
+.icon-editor-inner {
+  width: min(100%, 420px);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.icon-canvas-wrap {
+  display: flex;
+  justify-content: center;
+}
+
+#iconCanvas {
+  display: block;
+  width: 256px;
+  height: 256px;
+  margin: 0 auto;
+  background: var(--black);
+  border: 2px solid var(--orange);
+  cursor: crosshair;
+  image-rendering: pixelated;
+}
+
+.icon-code {
+  min-height: 52px;
+  padding: 10px 12px;
+  font-size: 18px;
+  letter-spacing: 0.06em;
+  line-height: 1.35;
+  word-break: break-word;
+  user-select: text;
+  text-align: center;
+}
+
+.icon-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.icon-controls button {
+  width: 100%;
+}
+
 button,
 input,
 select {
   font: inherit;
+}
+
+button {
+  width: auto;
 }
 
 [hidden] {
@@ -439,5 +507,10 @@ button.active {
   .save-icon {
     top: 8px;
     right: 8px;
+  }
+
+  #iconCanvas {
+    width: min(72vw, 256px);
+    height: min(72vw, 256px);
   }
 }

@@ -9,16 +9,30 @@
 <body>
   <div id="startupOverlay" class="startup-overlay" aria-live="polite">
     <div class="startup-card">
-      <h1>CONNECT FLIPPER</h1>
+      <h1 id="startupTitle">LEVEL EDITOR</h1>
       <p id="startupMessage">Please connect your Flipper to load levels.</p>
       <div class="startup-actions">
         <button id="connectBtn" type="button">CONNECT</button>
         <div class="startup-or" aria-hidden="true">Or</div>
         <button id="offlineBtn" type="button">CONTINUE OFFLINE</button>
+        <div class="icon-editor-prompt">To create a game icon</div>
+        <button id="iconEditorBtn" type="button">ICON EDITOR</button>
       </div>
       <div id="levelsPanel" class="levels-panel" hidden>
         <div class="levels-title">Levels on Flipper</div>
         <div id="levelsList" class="levels-list"></div>
+      </div>
+      <div id="iconEditorPanel" class="icon-editor" hidden>
+        <div class="icon-editor-inner">
+          <canvas id="iconCanvas" width="128" height="128" aria-label="8x8 icon canvas"></canvas>
+          <div id="iconCode" class="icon-code" aria-live="polite"></div>
+          <div class="icon-controls">
+            <button id="iconClear">Clear</button>
+            <button id="iconInvert">Invert</button>
+            <button id="iconCopy">Copy Code</button>
+            <button id="iconClose">Close</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
