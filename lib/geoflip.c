@@ -732,6 +732,12 @@ static void game_update(GeoApp* app) {
     }
     if(!app->btn_jump) app->jump_held = false;
 
+    /* If we just walked/fell off a block, don't keep the landing lock alive.
+       This lets the cube rotate normally while dropping without a jump. */
+    if(was_airborne == false && !app->on_ground) {
+        app->lock_angle = 0;
+    }
+
     /* ── rotation ── */
     if(!app->on_ground) {
         app->snapping = false;
