@@ -1146,7 +1146,14 @@ setSavingIcon(false);
 const iconCtx = el.iconCanvas && el.iconCanvas.getContext('2d');
 const ICON_SIZE = 8;
 const ICON_SCALE = Math.floor((el.iconCanvas ? el.iconCanvas.width : 128) / ICON_SIZE);
-const iconState = { pixels: new Array(ICON_SIZE).fill(0).map(() => new Array(ICON_SIZE).fill(0)), drawing: false };
+const ICON_GRID_COLOR = 'rgba(255, 130, 0, 0.35)';
+const iconState = {
+  pixels: new Array(ICON_SIZE).fill(0).map(() => new Array(ICON_SIZE).fill(0)),
+  drawing: false,
+  mode: 'paint',
+  dragMode: 'paint',
+  lastCellKey: '',
+};
 
 function iconCellSize() {
   if (!el.iconCanvas) return 1;
@@ -1171,17 +1178,14 @@ function renderIcon() {
     }
   }
   // grid
-  iconCtx.strokeStyle = ORANGE;
+  iconCtx.strokeStyle = ICON_GRID_COLOR;
+  iconCtx.fillStyle = ICON_GRID_COLOR;
   iconCtx.lineWidth = 1;
-  for (let i = 0; i <= ICON_SIZE; i++) {
-    iconCtx.beginPath();
-    iconCtx.moveTo(i * ICON_SCALE + 0.5, 0);
-    iconCtx.lineTo(i * ICON_SCALE + 0.5, el.iconCanvas.height);
-    iconCtx.stroke();
-    iconCtx.beginPath();
-    iconCtx.moveTo(0, i * ICON_SCALE + 0.5);
-    iconCtx.lineTo(el.iconCanvas.width, i * ICON_SCALE + 0.5);
-    iconCtx.stroke();
+  iconCtx.strokeRect(0.5, 0.5, el.iconCanvas.width - 1, el.iconCanvas.height - 1);
+  for (let i = 1; i < ICON_SIZE; i++) {
+    const p = i * ICON_SCALE;
+    iconCtx.fillRect(p, 0, 1, el.iconCanvas.height);
+    iconCtx.fillRect(0, p, el.iconCanvas.width, 1);
   }
 }
 
@@ -1193,10 +1197,17 @@ function iconCanvasCoords(clientX, clientY) {
   return { x: clamp(x, 0, ICON_SIZE - 1), y: clamp(y, 0, ICON_SIZE - 1) };
 }
 
-function toggleIconPixelAt(clientX, clientY, setTo) {
+function setIconPixelAt(clientX, clientY, mode) {
   const { x, y } = iconCanvasCoords(clientX, clientY);
-  if (typeof setTo === 'boolean') iconState.pixels[y][x] = setTo ? 1 : 0;
-  else iconState.pixels[y][x] = iconState.pixels[y][x] ? 0 : 1;
+  const cellKey = `${x},${y}`;
+  if (iconState.lastCellKey === cellKey && iconState.mode === mode) return;
+  iconState.lastCellKey = cellKey;
+  iconState.mode = mode;
+
+  const nextValue = mode === 'erase' ? 0 : mode === 'toggle' ? (iconState.pixels[y][x] ? 0 : 1) : 1;
+  if (iconState.pixels[y][x] === nextValue) return;
+
+  iconState.pixels[y][x] = nextValue;
   renderIcon();
   updateIconCode();
 }
@@ -1257,14 +1268,19 @@ if (el.iconCanvas) {
   el.iconCanvas.addEventListener('pointerdown', (ev) => {
     el.iconCanvas.setPointerCapture(ev.pointerId);
     iconState.drawing = true;
-    toggleIconPixelAt(ev.clientX, ev.clientY, ev.button === 2 ? false : true);
+    iconState.lastCellKey = '';
+    iconState.mode = ev.button === 2 ? 'erase' : 'toggle';
+    iconState.dragMode = ev.button === 2 ? 'erase' : 'paint';
+    setIconPixelAt(ev.clientX, ev.clientY, iconState.mode);
   });
   el.iconCanvas.addEventListener('pointermove', (ev) => {
     if (!iconState.drawing) return;
-    toggleIconPixelAt(ev.clientX, ev.clientY, ev.buttons === 2 ? false : true);
+    setIconPixelAt(ev.clientX, ev.clientY, iconState.dragMode);
   });
   el.iconCanvas.addEventListener('pointerup', (ev) => {
     iconState.drawing = false;
+    iconState.lastCellKey = '';
+    iconState.dragMode = 'paint';
   });
   el.iconCanvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
 }
