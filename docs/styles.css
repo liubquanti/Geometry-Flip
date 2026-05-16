@@ -68,6 +68,20 @@ body {
   flex-wrap: wrap;
 }
 
+.startup-or {
+  flex-basis: 100%;
+  text-align: left;
+  font-size: 20px;
+  letter-spacing: 0.14em;
+  line-height: 1;
+  margin: 2px 0;
+}
+
+#connectBtn,
+#offlineBtn {
+  flex-basis: 100%;
+}
+
 .startup-actions button {
   height: 38px;
 }
