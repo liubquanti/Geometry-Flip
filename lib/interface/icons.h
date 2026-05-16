@@ -10,3 +10,7 @@ extern const Icon I_character;
 extern const Icon I_play;
 extern const Icon I_tools;
 extern const Icon I_video_game_module;
+extern const Icon I_easy;
+extern const Icon I_hard;
+extern const Icon I_insane;
+extern const Icon I_demon;

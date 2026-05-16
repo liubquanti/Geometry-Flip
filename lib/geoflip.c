@@ -919,8 +919,9 @@ static void draw_objects(Canvas* canvas, const GeoApp* app) {
     for(int i = app->window_start; i < app->level.obj_count; i++) {
         const LvlObject* o = &app->level.objects[i];
         if(o->gx > right_edge_gx) break;
-        int sx = o->gx * CELL - app->cam_x;
-        int sy = GROUND_Y - (o->gy + 1) * CELL;
+            int sx = o->gx * CELL - app->cam_x;
+            int sy = GROUND_Y - (o->gy + 1) * CELL;
+            
         /* Compute vertical extents per object type to avoid partial vertical clipping
            and expensive draw operations when objects are off-screen above/below. */
         int topY = sy;
@@ -1271,54 +1272,113 @@ static void render_callback(Canvas* canvas, void* ctx) {
 
     /* ─── OFFICIAL LEVELS CAROUSEL ─── */
     if(app->state == GAMESTATE_OFFICIALS) {
-        /* show current official level as a full-screen card, allow left/right to change */
+        /* show current official level as a full-screen card, allow left/right to change
+           an extra trailing page is reserved for "Coming Soon!" */
+        int pages = (OFFICIAL_LEVEL_COUNT > 0) ? (OFFICIAL_LEVEL_COUNT + 1) : 1;
         int idx = app->official_sel;
         if(idx < 0) idx = 0;
-        if(idx >= OFFICIAL_LEVEL_COUNT) idx = OFFICIAL_LEVEL_COUNT - 1;
+        if(idx >= pages) idx = pages - 1;
         canvas_set_font(canvas, FontSecondary);
         if(OFFICIAL_LEVEL_COUNT > 0) {
-            canvas_set_font(canvas, FontPrimary);
-            /* draw big card only when there is an official level to show */
-            canvas_set_color(canvas, ColorBlack);
-            canvas_draw_rbox(canvas, 12, 10, SCREEN_W - 24, SCREEN_H - 20, 4);
-            canvas_set_color(canvas, ColorWhite);
-            canvas_draw_rbox(canvas, 13, 11, SCREEN_W - 26, SCREEN_H - 22, 3);
-            canvas_set_color(canvas, ColorBlack);
-            canvas_draw_rbox(canvas, 14, 12, SCREEN_W - 28, SCREEN_H - 24, 2);
-            canvas_set_color(canvas, ColorWhite);
-            canvas_draw_rbox(canvas, 15, 13, SCREEN_W - 30, SCREEN_H - 26, 1);
-            canvas_set_color(canvas, ColorBlack);
+            /* draw navigation arrows for both real levels and Coming Soon */
             canvas_set_font(canvas, FontSecondary);
             canvas_draw_icon(canvas, 3, 28, &I_button_left);
             canvas_draw_icon(canvas, SCREEN_W - 7, 28, &I_button_right);
-            const char* name = OFFICIAL_LEVELS[idx].name;
-            canvas_draw_str_aligned(
-                canvas,
-                SCREEN_W / 2,
-                SCREEN_H / 2,
-                AlignCenter,
-                AlignCenter,
-                name);
-            /* draw progress bar under the name using saved official progress */
-            int prog = 0;
-            if(idx >= 0 && idx < OFFICIAL_LEVEL_COUNT && app->official_prog) {
-                prog = app->official_prog[idx];
-                if(prog < 0) prog = 0;
-                if(prog > 100) prog = 100;
-            }
-            const int pb_x = 21;
-            const int pb_w = 86;
-            const int pb_h = 4;
-            const int pb_y = SCREEN_H / 2 + 8;
-            /* draw 1px border (black), white background, then filled portion */
-            canvas_set_color(canvas, ColorBlack);
-            canvas_draw_box(canvas, pb_x, pb_y, pb_w, pb_h); /* border */
-            canvas_set_color(canvas, ColorWhite);
-            canvas_draw_box(canvas, pb_x + 1, pb_y + 1, pb_w - 2, pb_h - 2); /* background */
-            int fill_w = (prog * (pb_w - 2)) / 100;
-            if(fill_w > 0) {
+            /* if idx points to a real official level -> draw full card, else draw Coming Soon */
+            if(idx < OFFICIAL_LEVEL_COUNT) {
+                canvas_set_font(canvas, FontSecondary);
+                /* draw big card */
                 canvas_set_color(canvas, ColorBlack);
-                canvas_draw_box(canvas, pb_x + 1, pb_y + 1, fill_w, pb_h - 2); /* filled */
+                canvas_draw_rbox(canvas, 12, 10, SCREEN_W - 24, SCREEN_H - 20, 4);
+                canvas_set_color(canvas, ColorWhite);
+                canvas_draw_rbox(canvas, 13, 11, SCREEN_W - 26, SCREEN_H - 22, 3);
+                canvas_set_color(canvas, ColorBlack);
+                canvas_draw_rbox(canvas, 14, 12, SCREEN_W - 28, SCREEN_H - 24, 2);
+                canvas_set_color(canvas, ColorWhite);
+                canvas_draw_rbox(canvas, 15, 13, SCREEN_W - 30, SCREEN_H - 26, 1);
+                canvas_set_color(canvas, ColorBlack);
+                /* arrows drawn above */
+                const char* name = OFFICIAL_LEVELS[idx].name;
+                canvas_draw_str_aligned(
+                    canvas,
+                    SCREEN_W / 2,
+                    SCREEN_H / 2 - 3,
+                    AlignCenter,
+                    AlignCenter,
+                    name);
+                /* draw difficulty icon */
+                const char* data = OFFICIAL_LEVELS[idx].data;
+                const char* key = "DIFICULTY ";
+                const char* p = data ? strstr(data, key) : NULL;
+                const Icon* diff_icon = NULL;
+                if(p) {
+                    p += strlen(key);
+                    char token[16] = {0};
+                    int ti = 0;
+                    while(*p && *p != '\n' && *p != '\r' && ti < (int)sizeof(token)-1) token[ti++] = *p++;
+                    token[ti] = '\0';
+                    if(strcmp(token, "Easy") == 0) diff_icon = &I_easy;
+                    else if(strcmp(token, "Hard") == 0) diff_icon = &I_hard;
+                    else if(strcmp(token, "Insane") == 0) diff_icon = &I_insane;
+                    else if(strcmp(token, "Demon") == 0) diff_icon = &I_demon;
+                }
+                if(diff_icon) {
+                    int icon_x = SCREEN_W/2 - 43; /* restored original placement */
+                    int icon_y = SCREEN_H/2 - 8;
+                    canvas_draw_icon(canvas, icon_x, icon_y, diff_icon);
+                }
+                /* draw progress bar */
+                int prog = 0;
+                if(idx >= 0 && idx < OFFICIAL_LEVEL_COUNT && app->official_prog) {
+                    prog = app->official_prog[idx];
+                    if(prog < 0) prog = 0;
+                    if(prog > 100) prog = 100;
+                }
+                const int pb_x = 21;
+                const int pb_w = 86;
+                const int pb_h = 4;
+                const int pb_y = SCREEN_H / 2 + 4;
+                canvas_set_color(canvas, ColorBlack);
+                canvas_draw_box(canvas, pb_x, pb_y, pb_w, pb_h);
+                canvas_set_color(canvas, ColorWhite);
+                canvas_draw_box(canvas, pb_x + 1, pb_y + 1, pb_w - 2, pb_h - 2);
+                int fill_w = (prog * (pb_w - 2)) / 100;
+                if(fill_w > 0) {
+                    canvas_set_color(canvas, ColorBlack);
+                    canvas_draw_box(canvas, pb_x + 1, pb_y + 1, fill_w, pb_h - 2);
+                }
+            } else {
+                /* Coming Soon page */
+                canvas_set_font(canvas, FontSecondary);
+                canvas_draw_str_aligned(
+                    canvas,
+                    SCREEN_W/2,
+                    SCREEN_H/2,
+                    AlignCenter,
+                    AlignCenter,
+                    "Coming Soon!");
+            }
+            /* draw page dots for pages */
+            if(pages > 1) {
+                const int dots_y = SCREEN_H - 5;
+                const int dot_r = 2;
+                const int spacing = 10;
+                int total_w = (pages - 1) * spacing;
+                int start_x = (SCREEN_W / 2) - (total_w / 2);
+                for(int i = 0; i < pages; i++) {
+                    int cx = start_x + i * spacing;
+                    if(i == idx) {
+                        canvas_set_color(canvas, ColorBlack);
+                        canvas_draw_disc(canvas, cx, dots_y, dot_r);
+                        canvas_set_color(canvas, ColorBlack);
+                        canvas_draw_circle(canvas, cx, dots_y, dot_r);
+                    } else {
+                        canvas_set_color(canvas, ColorWhite);
+                        canvas_draw_disc(canvas, cx, dots_y, dot_r);
+                        canvas_set_color(canvas, ColorBlack);
+                        canvas_draw_circle(canvas, cx, dots_y, dot_r);
+                    }
+                }
             }
         } else {
             canvas_draw_str_aligned(
@@ -1505,16 +1565,19 @@ int32_t geoflip(void* p) {
 
             case GAMESTATE_OFFICIALS:
                 if(pressed && ev.key == InputKeyLeft) {
-                    int n = OFFICIAL_LEVEL_COUNT ? OFFICIAL_LEVEL_COUNT : 1;
-                    app->official_sel = (int8_t)((app->official_sel - 1 + n) % n);
+                    int pages = (OFFICIAL_LEVEL_COUNT > 0) ? (OFFICIAL_LEVEL_COUNT + 1) : 1;
+                    app->official_sel = (int8_t)((app->official_sel - 1 + pages) % pages);
                 }
                 if(pressed && ev.key == InputKeyRight) {
-                    int n = OFFICIAL_LEVEL_COUNT ? OFFICIAL_LEVEL_COUNT : 1;
-                    app->official_sel = (int8_t)((app->official_sel + 1) % n);
-                } 
-                if(pressed && ev.key == InputKeyOk && OFFICIAL_LEVEL_COUNT > 0) {
-                    app->attempt = 0; app->best_pct = 0;
-                    game_start_official_level(app, app->official_sel);
+                    int pages = (OFFICIAL_LEVEL_COUNT > 0) ? (OFFICIAL_LEVEL_COUNT + 1) : 1;
+                    app->official_sel = (int8_t)((app->official_sel + 1) % pages);
+                }
+                if(pressed && ev.key == InputKeyOk) {
+                    /* Only start a level when a real official level is selected */
+                    if(OFFICIAL_LEVEL_COUNT > 0 && app->official_sel < OFFICIAL_LEVEL_COUNT) {
+                        app->attempt = 0; app->best_pct = 0;
+                        game_start_official_level(app, app->official_sel);
+                    }
                 }
                 if(pressed && ev.key == InputKeyBack) app->state = GAMESTATE_MAINMENU;
                 break;
