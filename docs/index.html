@@ -45,6 +45,16 @@
         </label>
 
         <label class="field narrow">
+          <span>Diff</span>
+          <select id="difficulty">
+            <option value="Easy">Easy</option>
+            <option value="Hard">Hard</option>
+            <option value="Insane">Insane</option>
+            <option value="Demon">Demon</option>
+          </select>
+        </label>
+
+        <label class="field narrow">
           <span>Length</span>
           <input id="levelLength" type="number" min="64" step="8" value="2000" />
         </label>
@@ -58,10 +68,9 @@
       <div class="actions">
         <div class="actions-title">Actions</div>
         <div class="actions-buttons">
-          <button id="newLevelBtn" type="button">NEW</button>
           <button id="loadBtn" type="button">LOAD</button>
           <button id="saveBtn" type="button">EXPORT</button>
-          <div id="saveStatus" class="save-status" hidden>SAVED</div>
+          <button id="exitBtn" type="button">EXIT</button>
           <input id="fileInput" type="file" accept=".gdlvl,.txt" hidden />
         </div>
       </div>
@@ -69,6 +78,7 @@
 
     <main class="workspace">
       <canvas id="editorCanvas" aria-label="Level editor canvas"></canvas>
+      <span id="saveIcon" class="save-icon" aria-hidden="true" hidden></span>
     </main>
 
     <footer class="panel bottom-panel">

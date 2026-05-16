@@ -93,6 +93,7 @@ typedef struct {
     int16_t     speed;
     int16_t     gravity_pct;
     char        bg_style;
+    char        difficulty[16];
     int32_t     length;
     int16_t     obj_count;
     int16_t     dec_count;
@@ -157,6 +158,7 @@ typedef struct {
     /* menu */
     char    level_files[MAX_LEVELS][MAX_PATH_LEN];
     char    level_names[MAX_LEVELS][64];
+    char    level_difficulty[MAX_LEVELS][16];
     int8_t  level_count; /* custom levels from /ext/geoflip/levels */
     int8_t  menu_sel;
     int8_t  custom_sel;
@@ -273,6 +275,10 @@ static bool parse_level(const char* path, Level* lvl) {
             else if(strncmp(line, "SPEED ",   6) == 0) lvl->speed       = (int16_t)atoi(line+6);
             else if(strncmp(line, "GRAVITY ", 8) == 0) lvl->gravity_pct = (int16_t)atoi(line+8);
             else if(strncmp(line, "BG ",      3) == 0) lvl->bg_style    = line[3];
+            else if(strncmp(line, "DIFICULTY ", 10) == 0) {
+                strncpy(lvl->difficulty, line + 10, sizeof(lvl->difficulty)-1);
+                lvl->difficulty[sizeof(lvl->difficulty)-1] = '\0';
+            }
             else if(strncmp(line, "LENGTH ",  7) == 0) lvl->length      = atoi(line+7);
             else if(strncmp(line, "OBJ ",     4) == 0 && lvl->obj_count < MAX_OBJECTS) {
                 char ts[16] = {0};
@@ -331,6 +337,10 @@ static bool parse_level_from_text(const char* text, Level* lvl) {
                 idx = 0;
                 if(line[0] != '#') {
                     if(strncmp(line, "NAME ", 5) == 0) strncpy(lvl->name, line + 5, 63);
+                    else if(strncmp(line, "DIFICULTY ", 10) == 0) {
+                        strncpy(lvl->difficulty, line + 10, sizeof(lvl->difficulty)-1);
+                        lvl->difficulty[sizeof(lvl->difficulty)-1] = '\0';
+                    }
                     else if(strncmp(line, "SPEED ", 6) == 0) lvl->speed = (int16_t)atoi(line + 6);
                     else if(strncmp(line, "GRAVITY ", 8) == 0) lvl->gravity_pct = (int16_t)atoi(line + 8);
                     else if(strncmp(line, "BG ", 3) == 0) lvl->bg_style = line[3];
@@ -1002,7 +1012,23 @@ static void render_callback(Canvas* canvas, void* ctx) {
                     canvas_draw_rbox(canvas, 2, y-9, SCREEN_W-4, 12, 2);
                     canvas_set_color(canvas, ColorWhite);
                 }
-                canvas_draw_str(canvas, 8, y, app->level_names[i]);
+                /* draw difficulty icon before the name */
+                const Icon* diff_icon = NULL;
+                const char* dstr = app->level_difficulty[i];
+                if(dstr) {
+                    if(strcmp(dstr, "Easy") == 0) diff_icon = &I_easy;
+                    else if(strcmp(dstr, "Hard") == 0) diff_icon = &I_hard;
+                    else if(strcmp(dstr, "Insane") == 0) diff_icon = &I_insane;
+                    else if(strcmp(dstr, "Demon") == 0) diff_icon = &I_demon;
+                }
+                int name_x = 8;
+                if(diff_icon) {
+                    int icon_x = 4;
+                    int icon_y = y - 8; /* align icon vertically with text */
+                    canvas_draw_icon(canvas, icon_x, icon_y, diff_icon);
+                    name_x = icon_x + 12;
+                }
+                canvas_draw_str(canvas, name_x, y, app->level_names[i]);
                 canvas_set_color(canvas, ColorBlack);
             }
         }
@@ -1492,11 +1518,14 @@ int32_t geoflip(void* p) {
         Level* tmp = malloc(sizeof(Level));
         if(tmp && parse_level(app->level_files[i], tmp)) {
             strncpy(app->level_names[i], tmp->name, 63);
+            strncpy(app->level_difficulty[i], tmp->difficulty[0] ? tmp->difficulty : "Easy", 15);
         } else {
             const char* sl = strrchr(app->level_files[i], '/');
             strncpy(app->level_names[i], sl ? sl+1 : app->level_files[i], 63);
+            strncpy(app->level_difficulty[i], "Easy", 15);
         }
         app->level_names[i][63] = '\0';
+        app->level_difficulty[i][15] = '\0';
         if(tmp) free(tmp);
     }
 
