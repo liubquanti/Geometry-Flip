@@ -40,7 +40,7 @@
 #define PLAYER_SIZE     8
 #define CELL            8
 #define GRAVITY         0.3f
-#define JUMP_VEL        (-3.1f)
+#define JUMP_VEL        (-3.2f)
 #define SCROLL_SPEED    2
 #define MAX_OBJECTS     512
 #define MAX_DECORATIONS 32
@@ -204,15 +204,15 @@ static void draw_player_rotated(Canvas* canvas, int cx, int cy, float angle_f, i
     /* draw skin pixels (8x8) rotated with same trig to preserve animation */
     if(skin >= 0 && skin < SKIN_COUNT) {
         const uint8_t* bmp = SKINS[skin];
-        /* pixel coordinates: i=0..7, j=0..7; center map to -R..R-1 */
         for(int j = 0; j < PLAYER_SIZE; j++) {
             uint8_t row = bmp[j];
             for(int i = 0; i < PLAYER_SIZE; i++) {
                 if(row & (1 << (7 - i))) {
-                    int x0 = i - (PLAYER_SIZE / 2);
-                    int y0 = j - (PLAYER_SIZE / 2);
-                    int pxp = cx + ((x0 * ca - y0 * sa + 64) >> 7);
-                    int pyp = cy + ((x0 * sa + y0 * ca + 64) >> 7);
+                    /* Rotate in half-pixel space so the 8x8 cube keeps all 8 columns/rows. */
+                    int x0 = i * 2 - (PLAYER_SIZE - 1);
+                    int y0 = j * 2 - (PLAYER_SIZE - 1);
+                    int pxp = cx + ((x0 * ca - y0 * sa) >> 8);
+                    int pyp = cy + ((x0 * sa + y0 * ca) >> 8);
                     canvas_draw_box(canvas, pxp, pyp, 1, 1);
                 }
             }
@@ -608,10 +608,13 @@ static void game_update(GeoApp* app) {
     if(app->py > (float)(SCREEN_H + 4)) { game_begin_death(app); return; }
 
     /* ── player hitbox (pre-computed once) ── */
-    const int px_hit = PLAYER_GX * CELL + 1;
-    const int py_hit = (int)app->py + 1;
-    const int pw_hit = PLAYER_SIZE - 2;
-    const int ph_hit = PLAYER_SIZE - 1;  /* slightly taller for better block adhesion */
+    const int px_hit = PLAYER_GX * CELL;
+    const int py_hit = (int)app->py;
+    const int pw_hit = PLAYER_SIZE;
+    const int ph_hit = PLAYER_SIZE;
+    const int player_right = px_hit + pw_hit;
+    const float prev_bottom = app->prev_py + PLAYER_SIZE;
+    const float curr_bottom = app->py + PLAYER_SIZE;
 
         /* ── sliding window: advance only when objects fully leave the left edge ── */
         while(app->window_start < app->level.obj_count &&
@@ -632,27 +635,26 @@ static void game_update(GeoApp* app) {
         int sy = GROUND_Y - (o->gy + 1) * CELL;
 
         if(o->type == OBJ_BLOCK) {
-            /* Explicit stick-to-block logic: if player is very close to block top,
-               snap them onto it (helps with seamless multi-block traversal) */
+            /* Snap to the top face as soon as the cube is within a 1px band above it.
+               This keeps the visible cube flush while still killing true side hits. */
+            bool horizontal = player_right >= sx - 1 && px_hit <= sx + CELL + 1;
+            bool supports_top = app->vy >= 0.0f && horizontal &&
+                                prev_bottom <= (float)(sy + 1) &&
+                                curr_bottom >= (float)(sy - 1);
 
-            if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit, sx, sy, CELL, CELL)) {
-                bool from_above = (int)app->prev_py + PLAYER_SIZE <= sy + 2;
-                /* allow a slightly larger tolerance for landing detection */
-                bool tolerant_above = (int)app->prev_py + PLAYER_SIZE <= sy + 4;
-                if((from_above || tolerant_above) && app->vy >= 0.0f) {
-                    app->py        = (float)(sy - PLAYER_SIZE);
-                    app->vy        = 0.0f;
-                    app->on_ground = true;
-                    /* Immediately lock angle to nearest 90° for block landings
-                       and mark landed_on_block so rotation logic knows to avoid
-                       playing the snapping animation this frame. */
-                    app->angle     = nearest_90(app->angle);
-                    app->snapping  = false;
-                    app->landed_on_block = true;
-                    app->lock_angle = 6; /* keep angle locked for a few frames */
-                } else {
-                    game_begin_death(app); return;
-                }
+            if(supports_top) {
+                app->py        = (float)(sy - PLAYER_SIZE);
+                app->vy        = 0.0f;
+                app->on_ground = true;
+                /* Immediately lock angle to nearest 90° for block landings
+                   and mark landed_on_block so rotation logic knows to avoid
+                   playing the snapping animation this frame. */
+                app->angle     = nearest_90(app->angle);
+                app->snapping  = false;
+                app->landed_on_block = true;
+                app->lock_angle = 6; /* keep angle locked for a few frames */
+            } else if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit, sx, sy, CELL, CELL)) {
+                game_begin_death(app); return;
             }
         } else if(o->type == OBJ_SPIKE) {
             if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit,
@@ -669,11 +671,11 @@ static void game_update(GeoApp* app) {
         } else if(o->type == OBJ_MINI_BLOCK) {
             /* Mini block: 4px tall, can land on top like regular block */
             int mbh = CELL / 2;
-            int player_bottom = (int)app->py + PLAYER_SIZE;
-            int block_top     = sy;
-            if(!app->on_ground && app->vy >= 0.0f && 
-               player_bottom > block_top - 2 && player_bottom < block_top + 4 &&
-               px_hit + pw_hit > sx && px_hit < sx + CELL) {
+            bool horizontal = player_right >= sx - 1 && px_hit <= sx + CELL + 1;
+            bool supports_top = app->vy >= 0.0f && horizontal &&
+                                prev_bottom <= (float)(sy + 1) &&
+                                curr_bottom >= (float)(sy - 1);
+            if(!app->on_ground && supports_top) {
                 app->py        = (float)(sy - PLAYER_SIZE);
                 app->vy        = 0.0f;
                 app->on_ground = true;
@@ -684,19 +686,7 @@ static void game_update(GeoApp* app) {
                 continue;
             }
             if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit, sx, sy, CELL, mbh)) {
-                bool from_above = (int)app->prev_py + PLAYER_SIZE <= sy + 2;
-                bool tolerant_above = (int)app->prev_py + PLAYER_SIZE <= sy + 4;
-                if((from_above || tolerant_above) && app->vy >= 0.0f) {
-                    app->py        = (float)(sy - PLAYER_SIZE);
-                    app->vy        = 0.0f;
-                    app->on_ground = true;
-                    app->angle     = nearest_90(app->angle);
-                    app->snapping  = false;
-                    app->landed_on_block = true;
-                    app->lock_angle = 6;
-                } else {
-                    game_begin_death(app); return;
-                }
+                game_begin_death(app); return;
             }
         } else if(o->type == OBJ_JUMPER) {
             /* Jumper pad: 2px tall at bottom, triggers auto-jump on any contact.
