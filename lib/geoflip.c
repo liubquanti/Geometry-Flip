@@ -1818,6 +1818,7 @@ int32_t geoflip(void* p) {
                app->menu_cube_x > SCREEN_W + PLAYER_SIZE) {
                 app->menu_cube_timer = 0;
                 app->menu_cube_x = -PLAYER_SIZE;
+                app->menu_cube_skin = (int8_t)(rand() % SKIN_COUNT);
             }
 
             app->menu_cube_vy += GRAVITY;
