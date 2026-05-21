@@ -1,6 +1,8 @@
 const ORANGE = '#ff8200';
 const BLACK = '#000000';
 const GRID = 8;
+const MAX_OBJECTS = 512;
+const AUTO_LENGTH_PADDING = 10;
 const PANELS = {
   top: 136,
   bottom: 96,
@@ -51,6 +53,11 @@ const el = {
 const ctx = el.canvas.getContext('2d');
 ctx.imageSmoothingEnabled = false;
 
+if (el.levelLength) {
+  el.levelLength.disabled = true;
+  el.levelLength.title = 'Auto (last object + 10)';
+}
+
 const state = {
   tool: 'BLOCK',
   objectRotation: 0,
@@ -73,6 +80,7 @@ const state = {
   autosaveTimer: null,
   isConnected: false,
   hasFlipperFile: false,
+  lastLimitNotice: 0,
 };
 
 function normalizeRotation(raw) {
@@ -90,6 +98,34 @@ function rotate90(value) {
 
 function getObjectAt(gx, gy) {
   return state.level.objects.find((obj) => obj.gx === gx && obj.gy === gy);
+}
+
+function computeAutoLength(level) {
+  let maxGx = -1;
+  for (const obj of level.objects) {
+    if (Number.isFinite(obj.gx) && obj.gx > maxGx) maxGx = obj.gx;
+  }
+  const cells = Math.max(0, maxGx + AUTO_LENGTH_PADDING);
+  return Math.max(64, cells * GRID);
+}
+
+function applyAutoLength(updateCamera = true) {
+  state.level.length = computeAutoLength(state.level);
+  if (el.levelLength) {
+    el.levelLength.value = String(state.level.length);
+  }
+  if (updateCamera) {
+    el.cameraX.max = String(Math.max(0, state.level.length));
+    state.cameraX = clamp(state.cameraX, 0, Number(el.cameraX.max));
+    el.cameraX.value = String(state.cameraX);
+  }
+}
+
+function notifyObjectLimit() {
+  const now = Date.now();
+  if (now - state.lastLimitNotice < 800) return;
+  state.lastLimitNotice = now;
+  if (el.selectionInfo) el.selectionInfo.textContent = `LIMIT ${MAX_OBJECTS}`;
 }
 
 function cell() { return GRID * (state.zoom || 1); }
@@ -169,6 +205,7 @@ function undo() {
   state.redoStack.push(snapshot);
   // Restore previous state
   state.level = state.undoStack.pop();
+  applyAutoLength(false);
   setDirty(true);
   applyLevelToUI();
   render();
@@ -181,6 +218,7 @@ function redo() {
   state.undoStack.push(snapshot);
   // Restore next state
   state.level = state.redoStack.pop();
+  applyAutoLength(false);
   setDirty(true);
   applyLevelToUI();
   render();
@@ -215,6 +253,7 @@ function addOrReplaceObject(type, gx, gy) {
     if (existing) {
       pushHistory();
       state.level.objects = state.level.objects.filter((obj) => !(obj.gx === gx && obj.gy === gy));
+      applyAutoLength(false);
       setDirty();
     }
     return;
@@ -225,6 +264,11 @@ function addOrReplaceObject(type, gx, gy) {
   const rot = normalizeRotation(state.objectRotation);
   const isSameType = existing && existing.type === type;
   const isSameRot = existing && normalizeRotation(existing.rot) === rot;
+
+  if (!existing && state.level.objects.length >= MAX_OBJECTS) {
+    notifyObjectLimit();
+    return;
+  }
   
   // Only make changes if we're actually changing something
   if (!isSameType || !isSameRot) {
@@ -232,6 +276,7 @@ function addOrReplaceObject(type, gx, gy) {
     state.level.objects = state.level.objects.filter((obj) => !(obj.gx === gx && obj.gy === gy));
     state.level.objects.push({ type, gx, gy, rot });
     state.level.objects.sort((a, b) => a.gx - b.gx || a.gy - b.gy || a.type.localeCompare(b.type) || normalizeRotation(a.rot) - normalizeRotation(b.rot));
+    applyAutoLength(false);
     setDirty();
   }
 }
@@ -495,9 +540,7 @@ function applyLevelToUI() {
   el.levelName.value = state.level.name;
   el.bgStyle.value = state.level.bgStyle;
   el.difficulty.value = state.level.difficulty || 'Easy';
-  el.levelLength.value = state.level.length;
-  el.cameraX.max = String(Math.max(0, state.level.length));
-  el.cameraX.value = String(clamp(state.cameraX, 0, Number(el.cameraX.max)));
+  applyAutoLength(true);
   updateSelectionInfo();
   render();
 }
@@ -509,6 +552,7 @@ function setLevel(level, fileName = 'untitled.gdlvl') {
   state.cameraX = 0;
   state.cameraY = 0;
   state.dirty = false;
+  applyAutoLength(false);
   applyLevelToUI();
   setDirty(false);
 }
@@ -516,6 +560,7 @@ function setLevel(level, fileName = 'untitled.gdlvl') {
 function parseLevel(text) {
   const level = blankLevel();
   const lines = text.split(/\r?\n/);
+  let overflowed = false;
 
   for (const raw of lines) {
     const line = raw.trim();
@@ -531,7 +576,7 @@ function parseLevel(text) {
     } else if (key === 'DIFICULTY' && parts[1]) {
       level.difficulty = parts[1];
     } else if (key === 'LENGTH' && parts[1]) {
-      level.length = Number(parts[1]) || level.length;
+      // Length is auto-computed in the editor.
     } else if (key === 'SPEED' && parts[1]) {
       level.speed = Number(parts[1]) || level.speed;
     } else if (key === 'GRAVITY' && parts[1]) {
@@ -542,6 +587,10 @@ function parseLevel(text) {
       const gy = Number(parts[3]);
       const rot = parts.length >= 5 ? normalizeRotation(parts[4]) : 0;
       if (!Number.isFinite(gx) || !Number.isFinite(gy)) continue;
+      if (level.objects.length >= MAX_OBJECTS) {
+        overflowed = true;
+        continue;
+      }
       level.objects.push({ type, gx, gy, rot });
     } else if (key === 'DEC' && parts.length >= 4) {
       const type = parts[1].toUpperCase();
@@ -553,16 +602,18 @@ function parseLevel(text) {
   }
 
   level.objects.sort((a, b) => a.gx - b.gx || a.gy - b.gy || a.type.localeCompare(b.type) || normalizeRotation(a.rot) - normalizeRotation(b.rot));
+  if (overflowed) console.warn(`Object limit reached (${MAX_OBJECTS}); extra objects ignored.`);
   return level;
 }
 
 function serializeLevel(level) {
+  const autoLength = computeAutoLength(level);
   const lines = [
     '# Geometry Flip level generated by web editor',
     `NAME ${level.name}`,
     `BG ${level.bgStyle}`,
     `DIFICULTY ${level.difficulty || 'Easy'}`,
-    `LENGTH ${level.length}`,
+    `LENGTH ${autoLength}`,
     '',
     '# OBJ <TYPE> <GX> <GY> [ROT]',
   ];
@@ -965,26 +1016,20 @@ function syncInputsToLevel() {
   const oldName = state.level.name;
   const oldBgStyle = state.level.bgStyle;
   const oldDifficulty = state.level.difficulty || 'Easy';
-  const oldLength = state.level.length;
   
   const newName = el.levelName.value.trim() || 'Untitled Level';
   const newBgStyle = el.bgStyle.value;
   const newDifficulty = (el.difficulty && el.difficulty.value) ? el.difficulty.value : 'Easy';
-  const newLength = Math.max(64, Number(el.levelLength.value) || 2000);
   
   // Only push history and apply changes if something is about to change
-  if (oldName !== newName || oldBgStyle !== newBgStyle || oldLength !== newLength || oldDifficulty !== newDifficulty) {
+  if (oldName !== newName || oldBgStyle !== newBgStyle || oldDifficulty !== newDifficulty) {
     pushHistory();
     state.level.name = newName;
     state.level.bgStyle = newBgStyle;
     state.level.difficulty = newDifficulty;
-    state.level.length = newLength;
     setDirty(true);
   }
-  
-  el.cameraX.max = String(state.level.length);
-  state.cameraX = clamp(Number(el.cameraX.value) || 0, 0, state.level.length);
-  el.cameraX.value = String(state.cameraX);
+  applyAutoLength(true);
   render();
 }
 
