@@ -898,9 +898,10 @@ static void draw_mini_spike(Canvas* canvas, int sx, int sy) {
     int h = CELL / 2;
     int y_offset = sy + h;  /* Start from middle of cell */
     for(int r = 0; r < h; r++) {
-        int half = (h - 1 - r) / 2;
-        int x1 = sx + half;
-        int x2 = sx + CELL - 1 - half;
+        int span = 1;
+        if(h > 1) span = 1 + (CELL - 2) * r / (h - 1);
+        int x1 = sx + (CELL - span) / 2;
+        int x2 = x1 + span - 1;
         canvas_draw_line(canvas, x1, y_offset + r, x2, y_offset + r);
     }
     canvas_set_color(canvas, ColorWhite);
@@ -919,9 +920,10 @@ static void draw_mini_spike_rotated(Canvas* canvas, int sx, int sy, int rot) {
     if(r == 2) {
         /* down: top half */
         for(int row = 0; row < h; row++) {
-            int half = row / 2;
-            int x1 = sx + half;
-            int x2 = sx + CELL - 1 - half;
+            int span = 1;
+            if(h > 1) span = 1 + (CELL - 2) * (h - 1 - row) / (h - 1);
+            int x1 = sx + (CELL - span) / 2;
+            int x2 = x1 + span - 1;
             canvas_draw_line(canvas, x1, sy + row, x2, sy + row);
         }
         canvas_set_color(canvas, ColorWhite);
@@ -934,8 +936,8 @@ static void draw_mini_spike_rotated(Canvas* canvas, int sx, int sy, int rot) {
     int w = CELL / 2;
     int x0 = (r == 1) ? (sx + CELL - w) : sx;
     for(int col = 0; col < w; col++) {
-        int span = (col + 1) * CELL / w;
-        if(span < 1) span = 1;
+        int span = 1;
+        if(w > 1) span = 1 + (CELL - 2) * col / (w - 1);
         int y1 = sy + (CELL - span) / 2;
         int y2 = y1 + span - 1;
         int x = (r == 1) ? (x0 + col) : (x0 + (w - 1 - col));
