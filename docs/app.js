@@ -53,6 +53,7 @@ ctx.imageSmoothingEnabled = false;
 
 const state = {
   tool: 'BLOCK',
+  objectRotation: 0,
   cameraX: 0,
   cameraY: 0,
   dragging: false,
@@ -73,6 +74,23 @@ const state = {
   isConnected: false,
   hasFlipperFile: false,
 };
+
+function normalizeRotation(raw) {
+  let r = Number(raw);
+  if (!Number.isFinite(r)) return 0;
+  if (Number.isInteger(r) && Math.abs(r) <= 3) r *= 90;
+  r = ((r % 360) + 360) % 360;
+  const snapped = Math.round(r / 90) * 90;
+  return ((snapped % 360) + 360) % 360;
+}
+
+function rotate90(value) {
+  return (normalizeRotation(value) + 90) % 360;
+}
+
+function getObjectAt(gx, gy) {
+  return state.level.objects.find((obj) => obj.gx === gx && obj.gy === gy);
+}
 
 function cell() { return GRID * (state.zoom || 1); }
 
@@ -204,14 +222,16 @@ function addOrReplaceObject(type, gx, gy) {
 
   // Check if object already exists at this position with same type
   const existing = state.level.objects.find((obj) => obj.gx === gx && obj.gy === gy);
+  const rot = normalizeRotation(state.objectRotation);
   const isSameType = existing && existing.type === type;
+  const isSameRot = existing && normalizeRotation(existing.rot) === rot;
   
   // Only make changes if we're actually changing something
-  if (!isSameType) {
+  if (!isSameType || !isSameRot) {
     pushHistory();
     state.level.objects = state.level.objects.filter((obj) => !(obj.gx === gx && obj.gy === gy));
-    state.level.objects.push({ type, gx, gy });
-    state.level.objects.sort((a, b) => a.gx - b.gx || a.gy - b.gy || a.type.localeCompare(b.type));
+    state.level.objects.push({ type, gx, gy, rot });
+    state.level.objects.sort((a, b) => a.gx - b.gx || a.gy - b.gy || a.type.localeCompare(b.type) || normalizeRotation(a.rot) - normalizeRotation(b.rot));
     setDirty();
   }
 }
@@ -229,7 +249,18 @@ function updateSelectionInfo(gx = null, gy = null) {
     return;
   }
   const hoverText = gx === null ? '' : ` @ ${gx},${gy}`;
-  el.selectionInfo.textContent = `${state.tool}${hoverText}`;
+  let rotValue = null;
+  if (gx !== null && gy !== null) {
+    const hovered = getObjectAt(gx, gy);
+    if (hovered && (hovered.type === 'SPIKE' || hovered.type === 'MINI_SPIKE')) {
+      rotValue = normalizeRotation(hovered.rot || 0);
+    }
+  }
+  if (rotValue === null && (state.tool === 'SPIKE' || state.tool === 'MINI_SPIKE')) {
+    rotValue = normalizeRotation(state.objectRotation);
+  }
+  const rotText = (rotValue !== null) ? ` rot ${rotValue}` : '';
+  el.selectionInfo.textContent = `${state.tool}${rotText}${hoverText}`;
 }
 
 function drawGrid(width, height) {
@@ -283,6 +314,31 @@ function drawSpike(x, y, w, h) {
   ctx.fill();
 }
 
+function drawSpikeRotated(x, y, w, h, rot) {
+  const r = normalizeRotation(rot);
+  if (r === 0) {
+    drawSpike(x, y, w, h);
+    return;
+  }
+  ctx.fillStyle = ORANGE;
+  ctx.beginPath();
+  if (r === 90) {
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + w, y + h / 2);
+    ctx.lineTo(x, y + h);
+  } else if (r === 180) {
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + w / 2, y + h);
+    ctx.lineTo(x + w, y);
+  } else {
+    ctx.moveTo(x + w, y);
+    ctx.lineTo(x, y + h / 2);
+    ctx.lineTo(x + w, y + h);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
 function drawMiniSpike(x, y, w, h) {
   const midY = y + h;
   ctx.fillStyle = ORANGE;
@@ -290,6 +346,35 @@ function drawMiniSpike(x, y, w, h) {
   ctx.moveTo(x, midY);
   ctx.lineTo(x + w / 2, y);
   ctx.lineTo(x + w, midY);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawMiniSpikeRotated(x, y, w, h, rot) {
+  const r = normalizeRotation(rot);
+  const halfH = h / 2;
+  const halfW = w / 2;
+  if (r === 0) {
+    drawMiniSpike(x, y + halfH, w, halfH);
+    return;
+  }
+  ctx.fillStyle = ORANGE;
+  ctx.beginPath();
+  if (r === 180) {
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + w / 2, y + halfH);
+    ctx.lineTo(x + w, y);
+  } else if (r === 90) {
+    const x0 = x + halfW;
+    ctx.moveTo(x0, y);
+    ctx.lineTo(x0 + halfW, y + h / 2);
+    ctx.lineTo(x0, y + h);
+  } else {
+    const x0 = x;
+    ctx.moveTo(x0 + halfW, y);
+    ctx.lineTo(x0, y + h / 2);
+    ctx.lineTo(x0 + halfW, y + h);
+  }
   ctx.closePath();
   ctx.fill();
 }
@@ -325,10 +410,10 @@ function drawObject(obj) {
       drawBlock(x, y, s, s);
       break;
     case 'SPIKE':
-      drawSpike(x, y, s, s);
+      drawSpikeRotated(x, y, s, s, obj.rot || 0);
       break;
     case 'MINI_SPIKE':
-      drawMiniSpike(x, y + s / 2, s, s / 2);
+      drawMiniSpikeRotated(x, y, s, s, obj.rot || 0);
       break;
     case 'MINI_BLOCK':
       drawMiniBlock(x, y + s / 2, s, s / 2);
@@ -455,8 +540,9 @@ function parseLevel(text) {
       const type = parts[1].toUpperCase();
       const gx = Number(parts[2]);
       const gy = Number(parts[3]);
+      const rot = parts.length >= 5 ? normalizeRotation(parts[4]) : 0;
       if (!Number.isFinite(gx) || !Number.isFinite(gy)) continue;
-      level.objects.push({ type, gx, gy });
+      level.objects.push({ type, gx, gy, rot });
     } else if (key === 'DEC' && parts.length >= 4) {
       const type = parts[1].toUpperCase();
       const x = Number(parts[2]);
@@ -466,7 +552,7 @@ function parseLevel(text) {
     }
   }
 
-  level.objects.sort((a, b) => a.gx - b.gx || a.gy - b.gy || a.type.localeCompare(b.type));
+  level.objects.sort((a, b) => a.gx - b.gx || a.gy - b.gy || a.type.localeCompare(b.type) || normalizeRotation(a.rot) - normalizeRotation(b.rot));
   return level;
 }
 
@@ -478,11 +564,13 @@ function serializeLevel(level) {
     `DIFICULTY ${level.difficulty || 'Easy'}`,
     `LENGTH ${level.length}`,
     '',
-    '# OBJ <TYPE> <GX> <GY>',
+    '# OBJ <TYPE> <GX> <GY> [ROT]',
   ];
 
   for (const obj of level.objects) {
-    lines.push(`OBJ ${obj.type} ${obj.gx} ${obj.gy}`);
+    const rot = normalizeRotation(obj.rot || 0);
+    const rotPart = rot ? ` ${rot}` : '';
+    lines.push(`OBJ ${obj.type} ${obj.gx} ${obj.gy}${rotPart}`);
   }
 
   if (level.decorations.length) {
@@ -936,6 +1024,25 @@ function loadFromFile(file) {
   reader.readAsText(file);
 }
 
+function rotateHoveredOrTool() {
+  if (state.hover) {
+    const obj = getObjectAt(state.hover.gx, state.hover.gy);
+    if (obj && (obj.type === 'SPIKE' || obj.type === 'MINI_SPIKE')) {
+      pushHistory();
+      obj.rot = rotate90(obj.rot || 0);
+      setDirty(true);
+      render();
+      updateSelectionInfo(state.hover.gx, state.hover.gy);
+      return;
+    }
+  }
+
+  if (state.tool === 'SPIKE' || state.tool === 'MINI_SPIKE') {
+    state.objectRotation = rotate90(state.objectRotation);
+    updateSelectionInfo(state.hover?.gx ?? null, state.hover?.gy ?? null);
+  }
+}
+
 if (el.exitBtn) el.exitBtn.addEventListener('click', () => {
   if (state.dirty) {
     if (!confirm('You have unsaved changes. Discard and return to level list?')) return;
@@ -987,6 +1094,14 @@ el.levelLength.addEventListener('input', syncInputsToLevel);
 el.cameraX.addEventListener('input', () => {
   state.cameraX = clamp(Number(el.cameraX.value) || 0, 0, Number(el.cameraX.max) || 0);
   render();
+});
+
+window.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'r' && ev.key !== 'R') return;
+  const tag = (ev.target && ev.target.tagName) ? ev.target.tagName.toLowerCase() : '';
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+  ev.preventDefault();
+  rotateHoveredOrTool();
 });
 
 el.canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());

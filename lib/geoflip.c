@@ -73,6 +73,7 @@ typedef struct {
     ObjType type;
     int16_t gx;
     int16_t gy;
+    int8_t  rot; /* 0..3 => 0,90,180,270 degrees */
 } LvlObject;
 
 typedef struct {
@@ -276,8 +277,9 @@ static bool parse_level(const char* path, Level* lvl) {
             else if(strncmp(line, "LENGTH ",  7) == 0) lvl->length      = atoi(line+7);
             else if(strncmp(line, "OBJ ",     4) == 0 && lvl->obj_count < MAX_OBJECTS) {
                 char ts[16] = {0};
-                int  gx = 0, gy = 0;
-                sscanf(line+4, "%15s %d %d", ts, &gx, &gy);
+                int  gx = 0, gy = 0, rot = 0;
+                int scanned = sscanf(line+4, "%15s %d %d %d", ts, &gx, &gy, &rot);
+                if(scanned < 3) continue;
                 ObjType t;
                 if     (strcmp(ts,"BLOCK") == 0)      t = OBJ_BLOCK;
                 else if(strcmp(ts,"SPIKE") == 0)      t = OBJ_SPIKE;
@@ -286,7 +288,16 @@ static bool parse_level(const char* path, Level* lvl) {
                 else if(strcmp(ts,"JUMPER") == 0)     t = OBJ_JUMPER;
                 else if(strcmp(ts,"SPHERE") == 0)     t = OBJ_SPHERE;
                 else continue;
-                lvl->objects[lvl->obj_count++] = (LvlObject){t, (int16_t)gx, (int16_t)gy};
+                int rot_idx = 0;
+                if(scanned >= 4) {
+                    if(rot % 90 == 0) {
+                        int r = ((rot % 360) + 360) % 360;
+                        rot_idx = (r / 90) & 3;
+                    } else {
+                        rot_idx = ((rot % 4) + 4) % 4;
+                    }
+                }
+                lvl->objects[lvl->obj_count++] = (LvlObject){t, (int16_t)gx, (int16_t)gy, (int8_t)rot_idx};
             }
             else if(strncmp(line, "DEC ", 4) == 0 && lvl->dec_count < MAX_DECORATIONS) {
                 char ts[16] = {0};
@@ -341,8 +352,9 @@ static bool parse_level_from_text(const char* text, Level* lvl) {
                     else if(strncmp(line, "LENGTH ", 7) == 0) lvl->length = atoi(line + 7);
                     else if(strncmp(line, "OBJ ", 4) == 0 && lvl->obj_count < MAX_OBJECTS) {
                         char ts[16] = {0};
-                        int gx = 0, gy = 0;
-                        sscanf(line + 4, "%15s %d %d", ts, &gx, &gy);
+                        int gx = 0, gy = 0, rot = 0;
+                        int scanned = sscanf(line + 4, "%15s %d %d %d", ts, &gx, &gy, &rot);
+                        if(scanned < 3) continue;
                         ObjType t;
                         if(strcmp(ts, "BLOCK") == 0) t = OBJ_BLOCK;
                         else if(strcmp(ts, "SPIKE") == 0) t = OBJ_SPIKE;
@@ -351,7 +363,16 @@ static bool parse_level_from_text(const char* text, Level* lvl) {
                         else if(strcmp(ts, "JUMPER") == 0) t = OBJ_JUMPER;
                         else if(strcmp(ts, "SPHERE") == 0) t = OBJ_SPHERE;
                         else continue;
-                        lvl->objects[lvl->obj_count++] = (LvlObject){t, (int16_t)gx, (int16_t)gy};
+                        int rot_idx = 0;
+                        if(scanned >= 4) {
+                            if(rot % 90 == 0) {
+                                int r = ((rot % 360) + 360) % 360;
+                                rot_idx = (r / 90) & 3;
+                            } else {
+                                rot_idx = ((rot % 4) + 4) % 4;
+                            }
+                        }
+                        lvl->objects[lvl->obj_count++] = (LvlObject){t, (int16_t)gx, (int16_t)gy, (int8_t)rot_idx};
                     } else if(strncmp(line, "DEC ", 4) == 0 && lvl->dec_count < MAX_DECORATIONS) {
                         char ts[16] = {0};
                         int x = 0, y = 0;
@@ -425,6 +446,37 @@ static void ensure_app_storage_dirs(void) {
 static bool rects_overlap(int ax, int ay, int aw, int ah,
                            int bx, int by, int bw, int bh) {
     return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
+}
+
+static void spike_hitbox(int sx, int sy, int rot, int* rx, int* ry, int* rw, int* rh) {
+    int r = rot & 3;
+    switch(r) {
+    case 1: /* right */
+        *rx = sx + 4; *ry = sy + 2; *rw = 4; *rh = 4; break;
+    case 2: /* down */
+        *rx = sx + 2; *ry = sy;     *rw = 4; *rh = 4; break;
+    case 3: /* left */
+        *rx = sx;     *ry = sy + 2; *rw = 4; *rh = 4; break;
+    case 0:
+    default: /* up */
+        *rx = sx + 2; *ry = sy + 4; *rw = 4; *rh = 4; break;
+    }
+}
+
+static void mini_spike_hitbox(int sx, int sy, int rot, int* rx, int* ry, int* rw, int* rh) {
+    int r = rot & 3;
+    int half = CELL / 2;
+    switch(r) {
+    case 1: /* right */
+        *rx = sx + half; *ry = sy;       *rw = half; *rh = CELL; break;
+    case 2: /* down */
+        *rx = sx;        *ry = sy;       *rw = CELL; *rh = half; break;
+    case 3: /* left */
+        *rx = sx;        *ry = sy;       *rw = half; *rh = CELL; break;
+    case 0:
+    default: /* up */
+        *rx = sx;        *ry = sy + half; *rw = CELL; *rh = half; break;
+    }
 }
 
 /* ─── Rotation helpers ───────────────────────────────────────────── */
@@ -657,15 +709,18 @@ static void game_update(GeoApp* app) {
                 game_begin_death(app); return;
             }
         } else if(o->type == OBJ_SPIKE) {
+            int rx = 0, ry = 0, rw = 0, rh = 0;
+            spike_hitbox(sx, sy, o->rot, &rx, &ry, &rw, &rh);
             if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit,
-                             sx+2, sy+4, 4, 4)) {
+                             rx, ry, rw, rh)) {
                 game_begin_death(app); return;
             }
         } else if(o->type == OBJ_MINI_SPIKE) {
-            /* Mini spike: full width, half height (bottom half of cell) */
-            int msh = CELL / 2;
+            /* Mini spike: rotated half-cell hitbox */
+            int rx = 0, ry = 0, rw = 0, rh = 0;
+            mini_spike_hitbox(sx, sy, o->rot, &rx, &ry, &rw, &rh);
             if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit,
-                             sx, sy + msh, CELL, msh)) {
+                             rx, ry, rw, rh)) {
                 game_begin_death(app); return;
             }
         } else if(o->type == OBJ_MINI_BLOCK) {
@@ -792,6 +847,43 @@ static void draw_spike(Canvas* canvas, int sx, int sy) {
     canvas_set_color(canvas, ColorBlack);
 }
 
+static void draw_spike_rotated(Canvas* canvas, int sx, int sy, int rot) {
+    int r = rot & 3;
+    if(r == 0) {
+        draw_spike(canvas, sx, sy);
+        return;
+    }
+
+    if(r == 2) {
+        /* down */
+        for(int row = 0; row < CELL; row++) {
+            int half = row / 2;
+            int x1 = sx + half;
+            int x2 = sx + CELL - 1 - half;
+            canvas_draw_line(canvas, x1, sy + row, x2, sy + row);
+        }
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_line(canvas, sx + 1, sy + 1, sx + CELL/2, sy + CELL - 2);
+        canvas_set_color(canvas, ColorBlack);
+        return;
+    }
+
+    /* left/right */
+    int w = CELL;
+    for(int col = 0; col < w; col++) {
+        int span = (col + 1) * CELL / w;
+        if(span < 1) span = 1;
+        int y1 = sy + (CELL - span) / 2;
+        int y2 = y1 + span - 1;
+        int x = (r == 1) ? (sx + col) : (sx + (CELL - 1 - col));
+        canvas_draw_line(canvas, x, y1, x, y2);
+    }
+    canvas_set_color(canvas, ColorWhite);
+    if(r == 1) canvas_draw_line(canvas, sx + 1, sy + 1, sx + CELL - 2, sy + CELL/2);
+    else canvas_draw_line(canvas, sx + CELL - 2, sy + 1, sx + 1, sy + CELL/2);
+    canvas_set_color(canvas, ColorBlack);
+}
+
 static void draw_block(Canvas* canvas, int sx, int sy) {
     canvas_draw_box(canvas, sx, sy, CELL, CELL);
     canvas_set_color(canvas, ColorWhite);
@@ -813,6 +905,45 @@ static void draw_mini_spike(Canvas* canvas, int sx, int sy) {
     }
     canvas_set_color(canvas, ColorWhite);
     canvas_draw_line(canvas, sx + 1, y_offset + h - 2, sx + CELL/2, y_offset + 1);
+    canvas_set_color(canvas, ColorBlack);
+}
+
+static void draw_mini_spike_rotated(Canvas* canvas, int sx, int sy, int rot) {
+    int r = rot & 3;
+    int h = CELL / 2;
+    if(r == 0) {
+        draw_mini_spike(canvas, sx, sy);
+        return;
+    }
+
+    if(r == 2) {
+        /* down: top half */
+        for(int row = 0; row < h; row++) {
+            int half = row / 2;
+            int x1 = sx + half;
+            int x2 = sx + CELL - 1 - half;
+            canvas_draw_line(canvas, x1, sy + row, x2, sy + row);
+        }
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_line(canvas, sx + 1, sy + 1, sx + CELL/2, sy + h - 2);
+        canvas_set_color(canvas, ColorBlack);
+        return;
+    }
+
+    /* left/right: half width */
+    int w = CELL / 2;
+    int x0 = (r == 1) ? (sx + CELL - w) : sx;
+    for(int col = 0; col < w; col++) {
+        int span = (col + 1) * CELL / w;
+        if(span < 1) span = 1;
+        int y1 = sy + (CELL - span) / 2;
+        int y2 = y1 + span - 1;
+        int x = (r == 1) ? (x0 + col) : (x0 + (w - 1 - col));
+        canvas_draw_line(canvas, x, y1, x, y2);
+    }
+    canvas_set_color(canvas, ColorWhite);
+    if(r == 1) canvas_draw_line(canvas, x0 + 1, sy + 1, x0 + w - 2, sy + CELL/2);
+    else canvas_draw_line(canvas, x0 + w - 2, sy + 1, x0 + 1, sy + CELL/2);
     canvas_set_color(canvas, ColorBlack);
 }
 
@@ -936,9 +1067,17 @@ static void draw_objects(Canvas* canvas, const GeoApp* app) {
         int topY = sy;
         int bottomY = sy + CELL;
         if(o->type == OBJ_MINI_SPIKE) {
-            /* mini spike occupies bottom half of cell */
-            topY = sy + (CELL / 2);
-            bottomY = sy + CELL;
+            /* mini spike bounds depend on rotation */
+            if((o->rot & 3) == 0) {
+                topY = sy + (CELL / 2);
+                bottomY = sy + CELL;
+            } else if((o->rot & 3) == 2) {
+                topY = sy;
+                bottomY = sy + (CELL / 2);
+            } else {
+                topY = sy;
+                bottomY = sy + CELL;
+            }
         } else if(o->type == OBJ_MINI_BLOCK) {
             /* mini block occupies top half of cell */
             topY = sy;
@@ -955,8 +1094,8 @@ static void draw_objects(Canvas* canvas, const GeoApp* app) {
 
         switch(o->type) {
         case OBJ_BLOCK:       draw_block(canvas, sx, sy); break;
-        case OBJ_SPIKE:       draw_spike(canvas, sx, sy); break;
-        case OBJ_MINI_SPIKE:  draw_mini_spike(canvas, sx, sy); break;
+        case OBJ_SPIKE:       draw_spike_rotated(canvas, sx, sy, o->rot); break;
+        case OBJ_MINI_SPIKE:  draw_mini_spike_rotated(canvas, sx, sy, o->rot); break;
         case OBJ_MINI_BLOCK:  draw_mini_block(canvas, sx, sy); break;
         case OBJ_JUMPER:      draw_jumper(canvas, sx, sy); break;
         case OBJ_SPHERE:      draw_sphere(canvas, sx, sy); break;
