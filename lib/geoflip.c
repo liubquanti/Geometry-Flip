@@ -51,6 +51,8 @@
 #define ROT_SPEED_AIR   9.0f
 #define ROT_SNAP_SPEED  18.0f
 #define DEATH_PARTICLES 24
+#define INTRO_HIDE_FRAMES 44  /* ~1s at 23ms per frame */
+#define INTRO_ENTRY_FRAMES 20 /* player slides in before camera starts */
 #define MENU_CUBE_PERIOD_FRAMES 174 /* ~4s at 23ms per frame */
 #define MENU_JUMP_PERIOD_FRAMES 43  /* ~1s at 23ms per frame */
 #define MENU_CUBE_SPEED ((float)(SCREEN_W + PLAYER_SIZE * 20) / MENU_CUBE_PERIOD_FRAMES)
@@ -156,6 +158,11 @@ typedef struct {
     uint16_t   menu_jump_timer;
     bool       menu_cube_on_ground;
     int8_t     menu_cube_skin;
+
+    /* level intro */
+    bool       intro_active;
+    uint16_t   intro_timer;
+    float      intro_player_x;
 
     /* menu */
     char    level_files[MAX_LEVELS][MAX_PATH_LEN];
@@ -601,6 +608,9 @@ static void game_start_level(GeoApp* app, int idx) {
     app->current_level_idx = (int8_t)idx;
     app->attempt++;
     game_reset(app);
+    app->intro_active = (app->attempt == 1);
+    app->intro_timer = 0;
+    app->intro_player_x = -PLAYER_SIZE;
     app->state = GAMESTATE_PLAYING;
 }
 
@@ -620,6 +630,9 @@ static void game_start_official_level(GeoApp* app, int idx) {
     }
     app->attempt++;
     game_reset(app);
+    app->intro_active = (app->attempt == 1);
+    app->intro_timer = 0;
+    app->intro_player_x = -PLAYER_SIZE;
     app->state = GAMESTATE_PLAYING;
 }
 
@@ -632,6 +645,33 @@ static void game_update(GeoApp* app) {
     if(app->state != GAMESTATE_PLAYING) return;
 
     app->frame++;
+
+    if(app->intro_active) {
+        app->intro_timer++;
+        app->btn_jump = false;
+        if(app->intro_timer <= INTRO_HIDE_FRAMES) {
+            return;
+        }
+        uint16_t t = app->intro_timer - INTRO_HIDE_FRAMES;
+        if(t <= INTRO_ENTRY_FRAMES) {
+            float start_x = -PLAYER_SIZE;
+            float end_x = (float)(PLAYER_GX * CELL);
+            float k = (float)t / (float)INTRO_ENTRY_FRAMES;
+            if(k < 0.0f) k = 0.0f;
+            if(k > 1.0f) k = 1.0f;
+            app->intro_player_x = start_x + (end_x - start_x) * k;
+            return;
+        }
+        app->intro_active = false;
+        app->intro_player_x = (float)(PLAYER_GX * CELL);
+        app->py = (float)(GROUND_Y - PLAYER_SIZE);
+        app->prev_py = app->py;
+        app->vy = 0.0f;
+        app->on_ground = true;
+        app->angle = 0.0f;
+        app->snapping = false;
+        app->lock_angle = 0;
+    }
 
     /* reset per-frame landing flag */
     app->landed_on_block = false;
@@ -1196,14 +1236,25 @@ static void render_callback(Canvas* canvas, void* ctx) {
 
         /* Player (hidden when dead). Draw only when fully inside screen to avoid costly partial clipping */
         if(app->state != GAMESTATE_DEAD) {
+            bool draw_player = true;
             int cx = PLAYER_GX * CELL + PLAYER_SIZE / 2;
             int cy = (int)app->py + PLAYER_SIZE / 2;
-            const int R = PLAYER_SIZE / 2;
-            /* Extend buffer by 2px to give cushion at edges before skipping draw */
-            const int buf = 2;
-                if(cx - R - buf >= 0 && cx + R + buf < SCREEN_W && 
-               cy - R - buf >= 0 && cy + R + buf < SCREEN_H) {
-                draw_player_rotated(canvas, cx, cy, app->angle, app->selected_skin);
+            if(app->intro_active) {
+                if(app->intro_timer <= INTRO_HIDE_FRAMES) {
+                    draw_player = false;
+                } else {
+                    cx = (int)app->intro_player_x + PLAYER_SIZE / 2;
+                    cy = (int)(GROUND_Y - PLAYER_SIZE) + PLAYER_SIZE / 2;
+                }
+            }
+            if(draw_player) {
+                const int R = PLAYER_SIZE / 2;
+                /* Extend buffer by 2px to give cushion at edges before skipping draw */
+                const int buf = 2;
+                if(cx - R - buf >= 0 && cx + R + buf < SCREEN_W &&
+                   cy - R - buf >= 0 && cy + R + buf < SCREEN_H) {
+                    draw_player_rotated(canvas, cx, cy, app->angle, app->selected_skin);
+                }
             }
         } else {
             death_particles_draw(canvas, app);
