@@ -1430,7 +1430,7 @@ if (el.iconCanvas) {
     iconState.drawing = true;
     iconState.lastCellKey = '';
     iconState.mode = ev.button === 2 ? 'erase' : 'toggle';
-    iconState.dragMode = ev.button === 2 ? 'erase' : 'paint';
+    iconState.dragMode = ev.button === 2 ? 'erase' : 'toggle';
     setIconPixelAt(ev.clientX, ev.clientY, iconState.mode);
   });
   el.iconCanvas.addEventListener('pointermove', (ev) => {
