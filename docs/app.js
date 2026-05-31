@@ -297,11 +297,11 @@ function updateSelectionInfo(gx = null, gy = null) {
   let rotValue = null;
   if (gx !== null && gy !== null) {
     const hovered = getObjectAt(gx, gy);
-    if (hovered && (hovered.type === 'SPIKE' || hovered.type === 'MINI_SPIKE')) {
+    if (hovered && (hovered.type === 'SPIKE' || hovered.type === 'MINI_SPIKE' || hovered.type === 'BLOCK' || hovered.type === 'MINI_BLOCK')) {
       rotValue = normalizeRotation(hovered.rot || 0);
     }
   }
-  if (rotValue === null && (state.tool === 'SPIKE' || state.tool === 'MINI_SPIKE')) {
+  if (rotValue === null && (state.tool === 'SPIKE' || state.tool === 'MINI_SPIKE' || state.tool === 'BLOCK' || state.tool === 'MINI_BLOCK')) {
     rotValue = normalizeRotation(state.objectRotation);
   }
   const rotText = (rotValue !== null) ? ` rot ${rotValue}` : '';
@@ -410,12 +410,12 @@ function drawMiniSpikeRotated(x, y, w, h, rot) {
     ctx.lineTo(x + w / 2, y + halfH);
     ctx.lineTo(x + w, y);
   } else if (r === 90) {
-    const x0 = x + halfW;
+    const x0 = x;
     ctx.moveTo(x0, y);
     ctx.lineTo(x0 + halfW, y + h / 2);
     ctx.lineTo(x0, y + h);
   } else {
-    const x0 = x;
+    const x0 = x + halfW;
     ctx.moveTo(x0 + halfW, y);
     ctx.lineTo(x0, y + h / 2);
     ctx.lineTo(x0 + halfW, y + h);
@@ -427,6 +427,21 @@ function drawMiniSpikeRotated(x, y, w, h, rot) {
 function drawMiniBlock(x, y, w, h) {
   ctx.fillStyle = ORANGE;
   ctx.fillRect(x, y, w, h);
+}
+
+function drawMiniBlockRotated(x, y, w, h, rot) {
+  const r = normalizeRotation(rot);
+  const halfW = w / 2;
+  const halfH = h / 2;
+  if (r === 0) {
+    drawMiniBlock(x, y + halfH, w, halfH);
+  } else if (r === 180) {
+    drawMiniBlock(x, y, w, halfH);
+  } else if (r === 90) {
+    drawMiniBlock(x, y, halfW, h);
+  } else {
+    drawMiniBlock(x + halfW, y, halfW, h);
+  }
 }
 
 function drawJumper(x, y, w, h) {
@@ -461,7 +476,7 @@ function drawObject(obj) {
       drawMiniSpikeRotated(x, y, s, s, obj.rot || 0);
       break;
     case 'MINI_BLOCK':
-      drawMiniBlock(x, y + s / 2, s, s / 2);
+      drawMiniBlockRotated(x, y, s, s, obj.rot || 0);
       break;
     case 'JUMPER':
       drawJumper(x, y, s, s);
@@ -1072,7 +1087,7 @@ function loadFromFile(file) {
 function rotateHoveredOrTool() {
   if (state.hover) {
     const obj = getObjectAt(state.hover.gx, state.hover.gy);
-    if (obj && (obj.type === 'SPIKE' || obj.type === 'MINI_SPIKE')) {
+    if (obj && (obj.type === 'SPIKE' || obj.type === 'MINI_SPIKE' || obj.type === 'BLOCK' || obj.type === 'MINI_BLOCK')) {
       pushHistory();
       obj.rot = rotate90(obj.rot || 0);
       setDirty(true);
@@ -1082,7 +1097,7 @@ function rotateHoveredOrTool() {
     }
   }
 
-  if (state.tool === 'SPIKE' || state.tool === 'MINI_SPIKE') {
+  if (state.tool === 'SPIKE' || state.tool === 'MINI_SPIKE' || state.tool === 'BLOCK' || state.tool === 'MINI_BLOCK') {
     state.objectRotation = rotate90(state.objectRotation);
     updateSelectionInfo(state.hover?.gx ?? null, state.hover?.gy ?? null);
   }

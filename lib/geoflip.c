@@ -456,34 +456,63 @@ static bool rects_overlap(int ax, int ay, int aw, int ah,
     return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
 }
 
-static void spike_hitbox(int sx, int sy, int rot, int* rx, int* ry, int* rw, int* rh) {
+static bool sprite_hits_player(int sx, int sy, const uint8_t* bmp, int rot,
+                               int px, int py, int pw, int ph) {
+    int r = rot & 3;
+    int px2 = px + pw;
+    int py2 = py + ph;
+    for(int y = 0; y < CELL; y++) {
+        uint8_t row = bmp[y];
+        for(int x = 0; x < CELL; x++) {
+            if(row & (1 << (7 - x))) {
+                int dx = x, dy = y;
+                if(r == 1) {
+                    dx = CELL - 1 - y;
+                    dy = x;
+                } else if(r == 2) {
+                    dx = CELL - 1 - x;
+                    dy = CELL - 1 - y;
+                } else if(r == 3) {
+                    dx = y;
+                    dy = CELL - 1 - x;
+                }
+                int wx = sx + dx;
+                int wy = sy + dy;
+                if(wx >= px && wx < px2 && wy >= py && wy < py2) return true;
+            }
+        }
+    }
+    return false;
+}
+
+static void mini_spike_hitbox_small(int sx, int sy, int rot, int* rx, int* ry, int* rw, int* rh) {
     int r = rot & 3;
     switch(r) {
     case 1: /* right */
-        *rx = sx + 4; *ry = sy + 2; *rw = 4; *rh = 4; break;
+        *rx = sx;     *ry = sy + 2; *rw = 4; *rh = 2; break;
     case 2: /* down */
-        *rx = sx + 2; *ry = sy;     *rw = 4; *rh = 4; break;
+        *rx = sx + 2; *ry = sy;     *rw = 4; *rh = 2; break;
     case 3: /* left */
-        *rx = sx;     *ry = sy + 2; *rw = 4; *rh = 4; break;
+        *rx = sx + 4; *ry = sy + 2; *rw = 4; *rh = 2; break;
     case 0:
     default: /* up */
-        *rx = sx + 2; *ry = sy + 4; *rw = 4; *rh = 4; break;
+        *rx = sx + 2; *ry = sy + 4; *rw = 4; *rh = 2; break;
     }
 }
 
-static void mini_spike_hitbox(int sx, int sy, int rot, int* rx, int* ry, int* rw, int* rh) {
+static void mini_block_rect(int sx, int sy, int rot, int* rx, int* ry, int* rw, int* rh) {
     int r = rot & 3;
     int half = CELL / 2;
     switch(r) {
-    case 1: /* right */
-        *rx = sx + half; *ry = sy;       *rw = half; *rh = CELL; break;
-    case 2: /* down */
-        *rx = sx;        *ry = sy;       *rw = CELL; *rh = half; break;
-    case 3: /* left */
-        *rx = sx;        *ry = sy;       *rw = half; *rh = CELL; break;
+    case 1: /* right half */
+        *rx = sx + half; *ry = sy; *rw = half; *rh = CELL; break;
+    case 2: /* top half */
+        *rx = sx; *ry = sy; *rw = CELL; *rh = half; break;
+    case 3: /* left half */
+        *rx = sx; *ry = sy; *rw = half; *rh = CELL; break;
     case 0:
-    default: /* up */
-        *rx = sx;        *ry = sy + half; *rw = CELL; *rh = half; break;
+    default: /* bottom half */
+        *rx = sx; *ry = sy + half; *rw = CELL; *rh = half; break;
     }
 }
 
@@ -750,30 +779,26 @@ static void game_update(GeoApp* app) {
                 game_begin_death(app); return;
             }
         } else if(o->type == OBJ_SPIKE) {
-            int rx = 0, ry = 0, rw = 0, rh = 0;
-            spike_hitbox(sx, sy, o->rot, &rx, &ry, &rw, &rh);
-            if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit,
-                             rx, ry, rw, rh)) {
+            if(sprite_hits_player(sx, sy, SPR_SPIKE, o->rot,
+                                  px_hit, py_hit, pw_hit, ph_hit)) {
                 game_begin_death(app); return;
             }
         } else if(o->type == OBJ_MINI_SPIKE) {
-            /* Mini spike: rotated half-cell hitbox */
             int rx = 0, ry = 0, rw = 0, rh = 0;
-            mini_spike_hitbox(sx, sy, o->rot, &rx, &ry, &rw, &rh);
-            if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit,
-                             rx, ry, rw, rh)) {
+            mini_spike_hitbox_small(sx, sy, o->rot, &rx, &ry, &rw, &rh);
+            if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit, rx, ry, rw, rh)) {
                 game_begin_death(app); return;
             }
         } else if(o->type == OBJ_MINI_BLOCK) {
             /* Mini block: 4px tall, can land on top like regular block */
-            int mbh = CELL / 2;
-            int mini_top = sy + mbh;
-            bool horizontal = player_right >= sx - 1 && px_hit <= sx + CELL + 1;
+            int rx = 0, ry = 0, rw = 0, rh = 0;
+            mini_block_rect(sx, sy, o->rot, &rx, &ry, &rw, &rh);
+            bool horizontal = player_right >= rx - 1 && px_hit <= rx + rw + 1;
             bool supports_top = app->vy >= 0.0f && horizontal &&
-                                prev_bottom <= (float)(mini_top + 1) &&
-                                curr_bottom >= (float)(mini_top - 1);
+                                prev_bottom <= (float)(ry + 1) &&
+                                curr_bottom >= (float)(ry - 1);
             if(!app->on_ground && supports_top) {
-                app->py        = (float)(mini_top - PLAYER_SIZE);
+                app->py        = (float)(ry - PLAYER_SIZE);
                 app->vy        = 0.0f;
                 app->on_ground = true;
                 app->angle     = nearest_90(app->angle);
@@ -782,7 +807,8 @@ static void game_update(GeoApp* app) {
                 app->lock_angle = 6;
                 continue;
             }
-            if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit, sx, sy + mbh, CELL, mbh)) {
+            if(sprite_hits_player(sx, sy, SPR_MINI_BLOCK, o->rot,
+                                  px_hit, py_hit, pw_hit, ph_hit)) {
                 game_begin_death(app); return;
             }
         } else if(o->type == OBJ_JUMPER) {
@@ -914,16 +940,16 @@ static void draw_spike_rotated(Canvas* canvas, int sx, int sy, int rot) {
     draw_sprite_rotated(canvas, sx, sy, SPR_SPIKE, rot);
 }
 
-static void draw_block(Canvas* canvas, int sx, int sy) {
-    draw_sprite(canvas, sx, sy, SPR_BLOCK);
+static void draw_block(Canvas* canvas, int sx, int sy, int rot) {
+    draw_sprite_rotated(canvas, sx, sy, SPR_BLOCK, rot);
 }
 
 static void draw_mini_spike_rotated(Canvas* canvas, int sx, int sy, int rot) {
     draw_sprite_rotated(canvas, sx, sy, SPR_MINI_SPIKE, rot);
 }
 
-static void draw_mini_block(Canvas* canvas, int sx, int sy) {
-    draw_sprite(canvas, sx, sy, SPR_MINI_BLOCK);
+static void draw_mini_block(Canvas* canvas, int sx, int sy, int rot) {
+    draw_sprite_rotated(canvas, sx, sy, SPR_MINI_BLOCK, rot);
 }
 
 static void draw_jumper(Canvas* canvas, int sx, int sy) {
@@ -1036,9 +1062,10 @@ static void draw_objects(Canvas* canvas, const GeoApp* app) {
                 bottomY = sy + CELL;
             }
         } else if(o->type == OBJ_MINI_BLOCK) {
-            /* mini block occupies top half of cell */
-            topY = sy;
-            bottomY = sy + (CELL / 2);
+            int rx = 0, ry = 0, rw = 0, rh = 0;
+            mini_block_rect(sx, sy, o->rot, &rx, &ry, &rw, &rh);
+            topY = ry;
+            bottomY = ry + rh;
         } else if(o->type == OBJ_JUMPER) {
             int jumper_h = 2;
             topY = sy + CELL - jumper_h;
@@ -1050,10 +1077,10 @@ static void draw_objects(Canvas* canvas, const GeoApp* app) {
         if(topY < 0 || bottomY > SCREEN_H) continue;
 
         switch(o->type) {
-        case OBJ_BLOCK:       draw_block(canvas, sx, sy); break;
+        case OBJ_BLOCK:       draw_block(canvas, sx, sy, o->rot); break;
         case OBJ_SPIKE:       draw_spike_rotated(canvas, sx, sy, o->rot); break;
         case OBJ_MINI_SPIKE:  draw_mini_spike_rotated(canvas, sx, sy, o->rot); break;
-        case OBJ_MINI_BLOCK:  draw_mini_block(canvas, sx, sy); break;
+        case OBJ_MINI_BLOCK:  draw_mini_block(canvas, sx, sy, o->rot); break;
         case OBJ_JUMPER:      draw_jumper(canvas, sx, sy); break;
         case OBJ_SPHERE:      draw_sphere(canvas, sx, sy); break;
         default: break;
@@ -1827,7 +1854,7 @@ int32_t geoflip(void* p) {
 
         view_port_update(vp);
         prev_state = app->state;
-        furi_delay_ms(23); /* must be 16 */
+        furi_delay_ms(80); /* must be 23 */
     }
 
     gui_remove_view_port(gui, vp);
