@@ -1854,7 +1854,7 @@ int32_t geoflip(void* p) {
 
         view_port_update(vp);
         prev_state = app->state;
-        furi_delay_ms(80); /* must be 23 */
+        furi_delay_ms(23); /* must be 23 */
     }
 
     gui_remove_view_port(gui, vp);
