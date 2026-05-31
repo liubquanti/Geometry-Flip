@@ -767,12 +767,13 @@ static void game_update(GeoApp* app) {
         } else if(o->type == OBJ_MINI_BLOCK) {
             /* Mini block: 4px tall, can land on top like regular block */
             int mbh = CELL / 2;
+            int mini_top = sy + mbh;
             bool horizontal = player_right >= sx - 1 && px_hit <= sx + CELL + 1;
             bool supports_top = app->vy >= 0.0f && horizontal &&
-                                prev_bottom <= (float)(sy + 1) &&
-                                curr_bottom >= (float)(sy - 1);
+                                prev_bottom <= (float)(mini_top + 1) &&
+                                curr_bottom >= (float)(mini_top - 1);
             if(!app->on_ground && supports_top) {
-                app->py        = (float)(sy - PLAYER_SIZE);
+                app->py        = (float)(mini_top - PLAYER_SIZE);
                 app->vy        = 0.0f;
                 app->on_ground = true;
                 app->angle     = nearest_90(app->angle);
@@ -781,7 +782,7 @@ static void game_update(GeoApp* app) {
                 app->lock_angle = 6;
                 continue;
             }
-            if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit, sx, sy, CELL, mbh)) {
+            if(rects_overlap(px_hit, py_hit, pw_hit, ph_hit, sx, sy + mbh, CELL, mbh)) {
                 game_begin_death(app); return;
             }
         } else if(o->type == OBJ_JUMPER) {
