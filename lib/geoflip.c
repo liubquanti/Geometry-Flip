@@ -29,6 +29,7 @@
 
 #include "lib/data/levels.h"
 #include "lib/data/skins.h"
+#include "lib/data/object_sprites.h"
 #include "lib/interface/icons.h"
 
 /* ─── Constants ─────────────────────────────────────────────────── */
@@ -870,153 +871,66 @@ static void game_update(GeoApp* app) {
 
 /* ─── Rendering ──────────────────────────────────────────────────── */
 
-static void draw_spike(Canvas* canvas, int sx, int sy) {
-    /* Filled isosceles triangle (pointing up) with an inner left-side highlight
-       Fill by drawing horizontal scanlines — fast and deterministic on Furi */
-    for(int r = 0; r < CELL; r++) {
-        int half = (CELL - 1 - r) / 2;
-        int x1 = sx + half;
-        int x2 = sx + CELL - 1 - half;
-        canvas_draw_line(canvas, x1, sy + r, x2, sy + r);
+static void draw_sprite(Canvas* canvas, int sx, int sy, const uint8_t* bmp) {
+    for(int y = 0; y < CELL; y++) {
+        uint8_t row = bmp[y];
+        for(int x = 0; x < CELL; x++) {
+            if(row & (1 << (7 - x))) {
+                canvas_draw_dot(canvas, sx + x, sy + y);
+            }
+        }
     }
+}
 
-    /* Inner left-side highlight similar to blocks: a thin white slanted line
-       inset from the left edge, running toward the apex */
-    canvas_set_color(canvas, ColorWhite);
-    canvas_draw_line(canvas, sx + 1, sy + CELL - 2, sx + CELL/2, sy + 1);
-    canvas_set_color(canvas, ColorBlack);
+static void draw_sprite_rotated(Canvas* canvas, int sx, int sy, const uint8_t* bmp, int rot) {
+    int r = rot & 3;
+    if(r == 0) {
+        draw_sprite(canvas, sx, sy, bmp);
+        return;
+    }
+    for(int y = 0; y < CELL; y++) {
+        uint8_t row = bmp[y];
+        for(int x = 0; x < CELL; x++) {
+            if(row & (1 << (7 - x))) {
+                int dx = 0, dy = 0;
+                if(r == 1) {
+                    dx = CELL - 1 - y;
+                    dy = x;
+                } else if(r == 2) {
+                    dx = CELL - 1 - x;
+                    dy = CELL - 1 - y;
+                } else {
+                    dx = y;
+                    dy = CELL - 1 - x;
+                }
+                canvas_draw_dot(canvas, sx + dx, sy + dy);
+            }
+        }
+    }
 }
 
 static void draw_spike_rotated(Canvas* canvas, int sx, int sy, int rot) {
-    int r = rot & 3;
-    if(r == 0) {
-        draw_spike(canvas, sx, sy);
-        return;
-    }
-
-    if(r == 2) {
-        /* down */
-        for(int row = 0; row < CELL; row++) {
-            int half = row / 2;
-            int x1 = sx + half;
-            int x2 = sx + CELL - 1 - half;
-            canvas_draw_line(canvas, x1, sy + row, x2, sy + row);
-        }
-        canvas_set_color(canvas, ColorWhite);
-        canvas_draw_line(canvas, sx + 1, sy + 1, sx + CELL/2, sy + CELL - 2);
-        canvas_set_color(canvas, ColorBlack);
-        return;
-    }
-
-    /* left/right */
-    int w = CELL;
-    for(int col = 0; col < w; col++) {
-        int span = (col + 1) * CELL / w;
-        if(span < 1) span = 1;
-        int y1 = sy + (CELL - span) / 2;
-        int y2 = y1 + span - 1;
-        int x = (r == 1) ? (sx + col) : (sx + (CELL - 1 - col));
-        canvas_draw_line(canvas, x, y1, x, y2);
-    }
-    canvas_set_color(canvas, ColorWhite);
-    if(r == 1) canvas_draw_line(canvas, sx + 1, sy + 1, sx + CELL - 2, sy + CELL/2);
-    else canvas_draw_line(canvas, sx + CELL - 2, sy + 1, sx + 1, sy + CELL/2);
-    canvas_set_color(canvas, ColorBlack);
+    draw_sprite_rotated(canvas, sx, sy, SPR_SPIKE, rot);
 }
 
 static void draw_block(Canvas* canvas, int sx, int sy) {
-    canvas_draw_box(canvas, sx, sy, CELL, CELL);
-    canvas_set_color(canvas, ColorWhite);
-    canvas_draw_line(canvas, sx+1, sy+1, sx+CELL-2, sy+1);
-    canvas_draw_line(canvas, sx+1, sy+1, sx+1, sy+CELL-2);
-    canvas_set_color(canvas, ColorBlack);
-}
-
-static void draw_mini_spike(Canvas* canvas, int sx, int sy) {
-    /* Mini spike: half height (4px), full width, same style as regular spike
-       Triangle pointing up from bottom half of cell */
-    int h = CELL / 2;
-    int y_offset = sy + h;  /* Start from middle of cell */
-    for(int r = 0; r < h; r++) {
-        int span = 1;
-        if(h > 1) span = 1 + (CELL - 2) * r / (h - 1);
-        int x1 = sx + (CELL - span) / 2;
-        int x2 = x1 + span - 1;
-        canvas_draw_line(canvas, x1, y_offset + r, x2, y_offset + r);
-    }
-    canvas_set_color(canvas, ColorWhite);
-    canvas_draw_line(canvas, sx + 1, y_offset + h - 2, sx + CELL/2, y_offset + 1);
-    canvas_set_color(canvas, ColorBlack);
+    draw_sprite(canvas, sx, sy, SPR_BLOCK);
 }
 
 static void draw_mini_spike_rotated(Canvas* canvas, int sx, int sy, int rot) {
-    int r = rot & 3;
-    int h = CELL / 2;
-    if(r == 0) {
-        draw_mini_spike(canvas, sx, sy);
-        return;
-    }
-
-    if(r == 2) {
-        /* down: top half */
-        for(int row = 0; row < h; row++) {
-            int span = 1;
-            if(h > 1) span = 1 + (CELL - 2) * (h - 1 - row) / (h - 1);
-            int x1 = sx + (CELL - span) / 2;
-            int x2 = x1 + span - 1;
-            canvas_draw_line(canvas, x1, sy + row, x2, sy + row);
-        }
-        canvas_set_color(canvas, ColorWhite);
-        canvas_draw_line(canvas, sx + 1, sy + 1, sx + CELL/2, sy + h - 2);
-        canvas_set_color(canvas, ColorBlack);
-        return;
-    }
-
-    /* left/right: half width */
-    int w = CELL / 2;
-    int x0 = (r == 1) ? (sx + CELL - w) : sx;
-    for(int col = 0; col < w; col++) {
-        int span = 1;
-        if(w > 1) span = 1 + (CELL - 2) * col / (w - 1);
-        int y1 = sy + (CELL - span) / 2;
-        int y2 = y1 + span - 1;
-        int x = (r == 1) ? (x0 + col) : (x0 + (w - 1 - col));
-        canvas_draw_line(canvas, x, y1, x, y2);
-    }
-    canvas_set_color(canvas, ColorWhite);
-    if(r == 1) canvas_draw_line(canvas, x0 + 1, sy + 1, x0 + w - 2, sy + CELL/2);
-    else canvas_draw_line(canvas, x0 + w - 2, sy + 1, x0 + 1, sy + CELL/2);
-    canvas_set_color(canvas, ColorBlack);
+    draw_sprite_rotated(canvas, sx, sy, SPR_MINI_SPIKE, rot);
 }
 
 static void draw_mini_block(Canvas* canvas, int sx, int sy) {
-    /* Mini block: 4px tall, 8px wide, filled with highlight */
-    int h = CELL / 2;
-    canvas_draw_box(canvas, sx, sy, CELL, h);
-    canvas_set_color(canvas, ColorWhite);
-    canvas_draw_line(canvas, sx+1, sy+1, sx+CELL-2, sy+1);
-    canvas_set_color(canvas, ColorBlack);
+    draw_sprite(canvas, sx, sy, SPR_MINI_BLOCK);
 }
 
 static void draw_jumper(Canvas* canvas, int sx, int sy) {
-    /* Jumper pad: thin pad at bottom (2px) with cross-hatch pattern */
-    int h = 2;
-    int y_pad = sy + CELL - h;
-    canvas_draw_box(canvas, sx, y_pad, CELL, h);
-    canvas_set_color(canvas, ColorWhite);
-    for(int i = 0; i < CELL; i += 2) {
-        canvas_draw_dot(canvas, sx + i, y_pad);
-    }
-    canvas_set_color(canvas, ColorBlack);
+    draw_sprite(canvas, sx, sy, SPR_JUMPER);
 }
 
 static void draw_sphere(Canvas* canvas, int sx, int sy) {
-    /* Sphere: circular pad, drawn as a circle outline */
-    int cx = sx + CELL / 2;
-    int cy = sy + CELL / 2;
-    int r = CELL / 2 - 1;
-    /* Draw approximation of circle using canvas */
-    canvas_draw_circle(canvas, cx, cy, r);
+    draw_sprite(canvas, sx, sy, SPR_SPHERE);
 }
 
 
