@@ -29,7 +29,7 @@
 
 #include "lib/data/levels.h"
 #include "lib/data/skins.h"
-#include "lib/data/object_sprites.h"
+#include "lib/data/objects.h"
 #include "lib/interface/icons.h"
 
 /* ─── Constants ─────────────────────────────────────────────────── */

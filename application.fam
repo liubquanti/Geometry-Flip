@@ -19,6 +19,6 @@ App(
         "lib/geoflip.c",
         "lib/data/levels.c",
         "lib/data/skins.c",
-        "lib/data/object_sprites.c",
+        "lib/data/objects.c",
     ],
 )
