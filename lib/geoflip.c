@@ -924,10 +924,14 @@ static void game_update(GeoApp* app) {
 
 static void draw_sprite(Canvas* canvas, int sx, int sy, const uint8_t* bmp) {
     for(int y = 0; y < CELL; y++) {
+        int py = sy + y;
+        if(py < 0 || py >= SCREEN_H) continue;
         uint8_t row = bmp[y];
         for(int x = 0; x < CELL; x++) {
             if(row & (1 << (7 - x))) {
-                canvas_draw_dot(canvas, sx + x, sy + y);
+                int px = sx + x;
+                if(px < 0 || px >= SCREEN_W) continue;
+                canvas_draw_dot(canvas, px, py);
             }
         }
     }
@@ -954,7 +958,10 @@ static void draw_sprite_rotated(Canvas* canvas, int sx, int sy, const uint8_t* b
                     dx = y;
                     dy = CELL - 1 - x;
                 }
-                canvas_draw_dot(canvas, sx + dx, sy + dy);
+                int px = sx + dx;
+                int py = sy + dy;
+                if(px < 0 || px >= SCREEN_W || py < 0 || py >= SCREEN_H) continue;
+                canvas_draw_dot(canvas, px, py);
             }
         }
     }
@@ -1097,9 +1104,12 @@ static void draw_objects(Canvas* canvas, const GeoApp* app) {
             bottomY = sy + CELL;
         }
 
-        /* require full horizontal and vertical containment to draw */
-        if(sx < 0 || sx + CELL > SCREEN_W) continue;
-        if(topY < 0 || bottomY > SCREEN_H) continue;
+        /* Skip only objects that are completely off-screen — sprite drawing
+           clips each pixel individually now, so partially visible objects
+           (e.g. at the top/bottom edge while the camera pans) still draw
+           correctly instead of popping out entirely. */
+        if(sx + CELL <= 0 || sx >= SCREEN_W) continue;
+        if(bottomY <= 0 || topY >= SCREEN_H) continue;
 
         switch(o->type) {
         case OBJ_BLOCK:       draw_block(canvas, sx, sy, o->rot); break;
