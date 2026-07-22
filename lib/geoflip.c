@@ -52,6 +52,8 @@
 #define ROT_SPEED_AIR   9.0f
 #define ROT_SNAP_SPEED  18.0f
 #define DEATH_PARTICLES 24
+#define CAM_Y_TRIGGER_ROWS 4   /* camera starts rising once player climbs above this many blocks */
+#define CAM_Y_SMOOTH    0.15f  /* lerp factor per frame for smooth vertical follow */
 #define INTRO_HIDE_FRAMES 44  /* ~1s at 23ms per frame */
 #define INTRO_ENTRY_FRAMES 20 /* player slides in before camera starts */
 #define MENU_CUBE_PERIOD_FRAMES 174 /* ~4s at 23ms per frame */
@@ -134,6 +136,7 @@ typedef struct {
 
     /* world */
     int32_t  cam_x;
+    float    cam_y; /* smoothed vertical camera offset (0 = no vertical scroll) */
     int16_t  window_start; /* index of first object that might be on screen */
     Level    level;
 
@@ -551,6 +554,7 @@ static void game_reset(GeoApp* app) {
     app->landed_on_block = false;
     app->lock_angle    = 0;
     app->cam_x        = 0;
+    app->cam_y        = 0.0f;
     app->frame        = 0;
     app->dead_timer   = 0;
     app->dead_pct     = 0;
@@ -593,11 +597,12 @@ static void death_particles_update(GeoApp* app) {
 }
 
 static void death_particles_draw(Canvas* canvas, const GeoApp* app) {
+    int camy = (int)app->cam_y;
     for(uint8_t i = 0; i < app->death_particle_count; i++) {
         const DeathParticle* p = &app->death_particles[i];
         if(p->life == 0) continue;
         int x = (int)p->x;
-        int y = (int)p->y;
+        int y = (int)p->y + camy;
         if(x < 0 || x >= SCREEN_W || y < 0 || y >= SCREEN_H) continue;
         canvas_draw_dot(canvas, x, y);
         if(p->life > 18 && x + 1 < SCREEN_W) canvas_draw_dot(canvas, x + 1, y);
@@ -882,6 +887,18 @@ static void game_update(GeoApp* app) {
         }
     }
 
+    /* ── vertical camera follow ──
+       Once the player climbs above CAM_Y_TRIGGER_ROWS blocks, smoothly pan
+       the camera up so the action stays on screen; eases back down when the
+       player descends again. Purely visual — physics/collision stay in the
+       original (unshifted) coordinate space above. */
+    {
+        float trigger_py = (float)(GROUND_Y - CAM_Y_TRIGGER_ROWS * CELL - PLAYER_SIZE);
+        float target_cam_y = 0.0f;
+        if(app->py < trigger_py) target_cam_y = trigger_py - app->py;
+        app->cam_y += (target_cam_y - app->cam_y) * CAM_Y_SMOOTH;
+    }
+
     /* ── win ── */
     if(app->cam_x >= app->level.length) {
         if(100 > app->best_pct) app->best_pct = 100;
@@ -1008,11 +1025,11 @@ static void draw_splash_screen(Canvas* canvas) {
 
 
 
-static void draw_decorations(Canvas* canvas, const Level* lvl, int cam_x) {
+static void draw_decorations(Canvas* canvas, const Level* lvl, int cam_x, int cam_y) {
     for(int i = 0; i < lvl->dec_count; i++) {
         const Decoration* d = &lvl->decorations[i];
         int sx = (int)d->x - cam_x / 2;
-        int sy = (int)d->y;
+        int sy = (int)d->y + cam_y;
         switch(d->type) {
         case DEC_STAR:
             /* skip if any star pixel would be off-screen */
@@ -1039,12 +1056,13 @@ static void draw_decorations(Canvas* canvas, const Level* lvl, int cam_x) {
 /* Draw only objects in the visible window (same bounds as collision) */
 static void draw_objects(Canvas* canvas, const GeoApp* app) {
     int right_edge_gx = (app->cam_x + SCREEN_W + CELL) / CELL;
+    int camy = (int)app->cam_y;
     for(int i = app->window_start; i < app->level.obj_count; i++) {
         const LvlObject* o = &app->level.objects[i];
         if(o->gx > right_edge_gx) break;
             int sx = o->gx * CELL - app->cam_x;
-            int sy = GROUND_Y - (o->gy + 1) * CELL;
-            
+            int sy = GROUND_Y - (o->gy + 1) * CELL + camy;
+
         /* Compute vertical extents per object type to avoid partial vertical clipping
            and expensive draw operations when objects are off-screen above/below. */
         int topY = sy;
@@ -1153,24 +1171,29 @@ static void render_callback(Canvas* canvas, void* ctx) {
        app->state == GAMESTATE_PAUSE   ||
        app->state == GAMESTATE_DEAD) {
 
+        int camy = (int)app->cam_y;
+        int ground_sy = GROUND_Y + camy;
+
         draw_background(canvas, app->level.bg_style, app->cam_x);
-        draw_decorations(canvas, &app->level, app->cam_x);
+        draw_decorations(canvas, &app->level, app->cam_x, camy);
 
-        /* Ground fill (white) */
-        canvas_set_color(canvas, ColorWhite);
-        canvas_draw_box(canvas, 0, GROUND_Y, SCREEN_W, SCREEN_H - GROUND_Y);
-        canvas_set_color(canvas, ColorBlack);
-
-        canvas_draw_line(canvas, 0, GROUND_Y, SCREEN_W-1, GROUND_Y);
+        /* Ground fill (white) — moves down/off-screen as the camera pans up */
+        if(ground_sy < SCREEN_H) {
+            canvas_set_color(canvas, ColorWhite);
+            canvas_draw_box(canvas, 0, ground_sy, SCREEN_W, SCREEN_H - ground_sy);
+            canvas_set_color(canvas, ColorBlack);
+            canvas_draw_line(canvas, 0, ground_sy, SCREEN_W-1, ground_sy);
+        }
 
         /* Attempt label — scrolls with level, visible at start */
         {
             int ax = 40 - app->cam_x;
-            if(ax > -60 && ax < SCREEN_W) {
+            int ay = GROUND_Y - 30 + camy;
+            if(ax > -60 && ax < SCREEN_W && ay >= 0 && ay < SCREEN_H) {
                 canvas_set_font(canvas, FontPrimary);
                 char buf[16];
                 snprintf(buf, sizeof(buf), "Attempt %d", (int)app->attempt);
-                canvas_draw_str(canvas, ax, GROUND_Y - 30, buf);
+                canvas_draw_str(canvas, ax, ay, buf);
             }
         }
 
@@ -1180,13 +1203,13 @@ static void render_callback(Canvas* canvas, void* ctx) {
         if(app->state != GAMESTATE_DEAD) {
             bool draw_player = true;
             int cx = PLAYER_GX * CELL + PLAYER_SIZE / 2;
-            int cy = (int)app->py + PLAYER_SIZE / 2;
+            int cy = (int)app->py + PLAYER_SIZE / 2 + camy;
             if(app->intro_active) {
                 if(app->intro_timer <= INTRO_HIDE_FRAMES) {
                     draw_player = false;
                 } else {
                     cx = (int)app->intro_player_x + PLAYER_SIZE / 2;
-                    cy = (int)(GROUND_Y - PLAYER_SIZE) + PLAYER_SIZE / 2;
+                    cy = (int)(GROUND_Y - PLAYER_SIZE) + PLAYER_SIZE / 2 + camy;
                 }
             }
             if(draw_player) {
