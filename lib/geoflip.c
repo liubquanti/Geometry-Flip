@@ -672,8 +672,15 @@ static void game_start_official_level(GeoApp* app, int idx) {
 }
 
 static void game_restart_current_level(GeoApp* app) {
-    if(app->current_is_official) game_start_official_level(app, app->current_level_idx);
-    else game_start_level(app, app->current_level_idx);
+    /* app->level is already parsed and unchanged between attempts — avoid
+       re-reading/re-parsing it (slow, especially for large custom levels
+       loaded from storage). Just reset gameplay state. */
+    app->attempt++;
+    game_reset(app);
+    app->intro_active = (app->attempt == 1);
+    app->intro_timer = 0;
+    app->intro_player_x = -PLAYER_SIZE;
+    app->state = GAMESTATE_PLAYING;
 }
 
 static void game_update(GeoApp* app) {
