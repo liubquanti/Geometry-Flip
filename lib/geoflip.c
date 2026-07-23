@@ -18,6 +18,7 @@
  */
 
 #include <furi.h>
+#include <furi_hal_speaker.h>
 #include <gui/gui.h>
 #include <input/input.h>
 #include <storage/storage.h>
@@ -30,6 +31,7 @@
 #include "lib/data/levels.h"
 #include "lib/data/skins.h"
 #include "lib/data/objects.h"
+#include "lib/data/music.h"
 #include "lib/interface/icons.h"
 
 /* ─── Constants ─────────────────────────────────────────────────── */
@@ -54,6 +56,9 @@
 #define DEATH_PARTICLES 24
 #define CAM_Y_TRIGGER_ROWS 4   /* camera starts rising once player climbs above this many blocks */
 #define CAM_Y_SMOOTH    0.15f  /* lerp factor per frame for smooth vertical follow */
+#define MUSIC_NOTES_MAX 900    /* max length of the comma-separated note-list string */
+#define MUSIC_TOKEN_MAX 24     /* max length of a single note token, e.g. "4F#6" */
+#define MUSIC_VOLUME    1.0f
 #define INTRO_HIDE_FRAMES 44  /* ~1s at 23ms per frame */
 #define INTRO_ENTRY_FRAMES 20 /* player slides in before camera starts */
 #define MENU_CUBE_PERIOD_FRAMES 174 /* ~4s at 23ms per frame */
@@ -106,6 +111,12 @@ typedef struct {
     int16_t     dec_count;
     LvlObject   objects[MAX_OBJECTS];
     Decoration  decorations[MAX_DECORATIONS];
+
+    /* background music (Flipper Music Format-style note list) */
+    int16_t     music_bpm;      /* 0 = no music */
+    int16_t     music_duration; /* default note length denominator, e.g. 8 = eighth note */
+    int16_t     music_octave;   /* default octave when a note token has none */
+    char        music_notes[MUSIC_NOTES_MAX]; /* comma-separated tokens, e.g. "E6, P, 4A, F#5" */
 } Level;
 
 typedef enum {
@@ -139,6 +150,22 @@ typedef struct {
     float    cam_y; /* smoothed vertical camera offset (0 = no vertical scroll) */
     int16_t  window_start; /* index of first object that might be on screen */
     Level    level;
+
+    /* music playback — one shared player, fed by whichever track is
+       currently selected (the level's tune while playing, the main-menu
+       tune everywhere else, see music_use_level_track/music_use_menu_track) */
+    const char* music_notes_src;    /* comma-separated FMF-style note tokens for the active track */
+    int16_t  music_src_bpm;
+    int16_t  music_src_duration;
+    int16_t  music_src_octave;
+    bool     music_active;   /* active track has a note list to play */
+    bool     music_acquired; /* we currently own the speaker */
+    uint16_t music_cursor;   /* byte offset of the next token in music_notes_src */
+    uint32_t music_next_tick; /* furi_get_tick() value (ms) at which to advance to the next note */
+    uint32_t music_pause_started; /* tick() when the tone was last paused/stopped */
+    float    music_cur_freq; /* frequency of the note currently sounding (0 = rest) */
+    bool     music_cur_rest;
+    bool     music_is_menu;  /* true once the main-menu track has been loaded for this menu visit */
 
     /* state */
     GameState  state;
@@ -205,6 +232,28 @@ static int isin128(int deg) {
 }
 static int icos128(int deg) { return isin128(deg + 90); }
 
+/* ─── Music note frequency LUT ───────────────────────────────────────
+   12-tone equal temperament, A4 = 440Hz, indexed by MIDI note number
+   (0..127). Avoids calling powf() at runtime. */
+static const float NOTE_FREQ_HZ[128] = {
+    8.18f, 8.66f, 9.18f, 9.72f, 10.30f, 10.91f, 11.56f, 12.25f,
+    12.98f, 13.75f, 14.57f, 15.43f, 16.35f, 17.32f, 18.35f, 19.45f,
+    20.60f, 21.83f, 23.12f, 24.50f, 25.96f, 27.50f, 29.14f, 30.87f,
+    32.70f, 34.65f, 36.71f, 38.89f, 41.20f, 43.65f, 46.25f, 49.00f,
+    51.91f, 55.00f, 58.27f, 61.74f, 65.41f, 69.30f, 73.42f, 77.78f,
+    82.41f, 87.31f, 92.50f, 98.00f, 103.83f, 110.00f, 116.54f, 123.47f,
+    130.81f, 138.59f, 146.83f, 155.56f, 164.81f, 174.61f, 185.00f, 196.00f,
+    207.65f, 220.00f, 233.08f, 246.94f, 261.63f, 277.18f, 293.66f, 311.13f,
+    329.63f, 349.23f, 369.99f, 392.00f, 415.30f, 440.00f, 466.16f, 493.88f,
+    523.25f, 554.37f, 587.33f, 622.25f, 659.26f, 698.46f, 739.99f, 783.99f,
+    830.61f, 880.00f, 932.33f, 987.77f, 1046.50f, 1108.73f, 1174.66f, 1244.51f,
+    1318.51f, 1396.91f, 1479.98f, 1567.98f, 1661.22f, 1760.00f, 1864.66f, 1975.53f,
+    2093.00f, 2217.46f, 2349.32f, 2489.02f, 2637.02f, 2793.83f, 2959.96f, 3135.96f,
+    3322.44f, 3520.00f, 3729.31f, 3951.07f, 4186.01f, 4434.92f, 4698.64f, 4978.03f,
+    5274.04f, 5587.65f, 5919.91f, 6271.93f, 6644.88f, 7040.00f, 7458.62f, 7902.13f,
+    8372.02f, 8869.84f, 9397.27f, 9956.06f, 10548.08f, 11175.30f, 11839.82f, 12543.85f,
+};
+
 /* ─── Draw rotated cube ──────────────────────────────────────────── */
 
 /* Player skins moved to lib/interface/skins.{h,c} */
@@ -247,6 +296,36 @@ static void sort_objects(LvlObject* arr, int n) {
     }
 }
 
+/* ─── Music directive parsing ────────────────────────────────────────
+   Level files may declare background music with a Flipper Music Format
+   style note list:
+     MUSIC BPM=130 DURATION=8 OCTAVE=5
+     NOTE E6, P, E, B, 4P, E, A, G, A, ...
+     NOTE D, B, 4P, D, A, G, A, D, F#, ...
+   NOTE lines are concatenated (comma-joined) into one note list so a long
+   tune can be split across several short lines. */
+
+static void parse_music_directive(const char* body, Level* lvl) {
+    const char* p;
+    if((p = strstr(body, "BPM=")))      lvl->music_bpm      = (int16_t)atoi(p + 4);
+    if((p = strstr(body, "DURATION="))) lvl->music_duration = (int16_t)atoi(p + 9);
+    if((p = strstr(body, "OCTAVE=")))   lvl->music_octave   = (int16_t)atoi(p + 7);
+}
+
+static void append_music_notes(Level* lvl, const char* chunk) {
+    size_t cap = sizeof(lvl->music_notes);
+    size_t used = strlen(lvl->music_notes);
+    if(used > 0 && used + 1 < cap) {
+        lvl->music_notes[used++] = ',';
+        lvl->music_notes[used]   = '\0';
+    }
+    size_t remain = (used + 1 < cap) ? (cap - used - 1) : 0;
+    size_t clen = strlen(chunk);
+    if(clen > remain) clen = remain;
+    memcpy(lvl->music_notes + used, chunk, clen);
+    lvl->music_notes[used + clen] = '\0';
+}
+
 /* ─── Level Parser ───────────────────────────────────────────────── */
 
 static bool parse_level(const char* path, Level* lvl) {
@@ -255,6 +334,9 @@ static bool parse_level(const char* path, Level* lvl) {
     lvl->gravity_pct = 100;
     lvl->bg_style    = '0';
     lvl->length      = 2000;
+    lvl->music_bpm      = 0;
+    lvl->music_duration = 8;
+    lvl->music_octave   = 5;
     strncpy(lvl->name, "Unnamed", sizeof(lvl->name) - 1);
 
     Storage* storage = furi_record_open(RECORD_STORAGE);
@@ -286,6 +368,8 @@ static bool parse_level(const char* path, Level* lvl) {
                 lvl->difficulty[sizeof(lvl->difficulty)-1] = '\0';
             }
             else if(strncmp(line, "LENGTH ",  7) == 0) lvl->length      = atoi(line+7);
+            else if(strncmp(line, "MUSIC ",   6) == 0) parse_music_directive(line + 6, lvl);
+            else if(strncmp(line, "NOTE ",    5) == 0) append_music_notes(lvl, line + 5);
             else if(strncmp(line, "OBJ ",     4) == 0 && lvl->obj_count < MAX_OBJECTS) {
                 char ts[16] = {0};
                 int  gx = 0, gy = 0, rot = 0;
@@ -341,6 +425,9 @@ static bool parse_level_from_text(const char* text, Level* lvl) {
     lvl->gravity_pct = 100;
     lvl->bg_style    = '0';
     lvl->length      = 2000;
+    lvl->music_bpm      = 0;
+    lvl->music_duration = 8;
+    lvl->music_octave   = 5;
     strncpy(lvl->name, "Unnamed", sizeof(lvl->name) - 1);
 
     char line[128];
@@ -361,6 +448,8 @@ static bool parse_level_from_text(const char* text, Level* lvl) {
                     else if(strncmp(line, "GRAVITY ", 8) == 0) lvl->gravity_pct = (int16_t)atoi(line + 8);
                     else if(strncmp(line, "BG ", 3) == 0) lvl->bg_style = line[3];
                     else if(strncmp(line, "LENGTH ", 7) == 0) lvl->length = atoi(line + 7);
+                    else if(strncmp(line, "MUSIC ", 6) == 0) parse_music_directive(line + 6, lvl);
+                    else if(strncmp(line, "NOTE ", 5) == 0) append_music_notes(lvl, line + 5);
                     else if(strncmp(line, "OBJ ", 4) == 0 && lvl->obj_count < MAX_OBJECTS) {
                         char ts[16] = {0};
                         int gx = 0, gy = 0, rot = 0;
@@ -413,6 +502,11 @@ static void save_player_profile(GeoApp* app);
 static void load_player_profile(GeoApp* app);
 static void save_official_progress(GeoApp* app);
 static void load_official_progress(GeoApp* app);
+
+/* forward declarations for music track switching (defined alongside the
+   rest of the music player, further down) */
+static void music_use_level_track(GeoApp* app);
+static void music_use_menu_track(GeoApp* app);
 
 /* ─── Level Discovery ────────────────────────────────────────────── */
 
@@ -562,6 +656,11 @@ static void game_reset(GeoApp* app) {
     app->death_particle_count = 0;
     /* reset sliding window to beginning of sorted object list */
     app->window_start = 0;
+
+    /* (re)start the tune from the beginning; music_acquired / hardware
+       ownership is left untouched here — see music_pause/music_resume/
+       music_release, driven by the state machine in the main loop. */
+    music_use_level_track(app);
 }
 
 static void death_particles_spawn(GeoApp* app) {
@@ -918,6 +1017,230 @@ static void game_update(GeoApp* app) {
         }
         app->state = GAMESTATE_WIN;
     }
+}
+
+/* ─── Background music (FMF-style note list) ─────────────────────────
+   Notes are stored as a comma-separated token string, each token shaped
+   like an FMF note: <duration><note|rest><sharp><octave><dots>. An
+   optional leading duration-override digit(s), then either 'P'/'p' (rest)
+   or a note letter A-G with an optional '#' (sharp) / 'b' (flat, a
+   leniency beyond the official FMF grammar) and an optional trailing
+   octave digit, followed by 0+ '.' dot characters (each dot multiplies
+   the note's length by 1.5, compounding). Examples: "E6", "P", "4P",
+   "F#", "Bb4", "4A#5.". Missing duration/octave fall back to the level's
+   MUSIC BPM/DURATION/OCTAVE defaults. Playback is driven once per frame
+   from the main loop — no blocking delays, no worker thread. */
+
+/* Pull the next comma-separated token out of `notes`, looping back to the
+   start once the end of the list is reached (so tunes repeat forever). */
+static bool music_next_token(const char* notes, uint16_t* cursor, char* out, int out_cap) {
+    int len = (int)strlen(notes);
+    if(len == 0) return false;
+    if(*cursor >= (uint16_t)len) *cursor = 0;
+
+    int start = (int)*cursor;
+    int i = start;
+    while(i < len && notes[i] != ',') i++;
+    int end = i;
+    *cursor = (uint16_t)((i < len) ? i + 1 : len);
+
+    while(start < end && notes[start] == ' ') start++;
+    while(end > start && notes[end - 1] == ' ') end--;
+
+    int tlen = end - start;
+    if(tlen <= 0 || tlen >= out_cap) return false;
+    memcpy(out, notes + start, (size_t)tlen);
+    out[tlen] = '\0';
+    return true;
+}
+
+/* Parse one note token into a frequency (0 = rest) and its duration in
+   milliseconds. Returns false if the token was unusable (caller just
+   retries next frame). */
+static bool music_parse_token(const char* tok, int default_dur, int default_octave, int bpm,
+                              float* out_freq, bool* out_rest, int* out_ms) {
+    int i = 0;
+    while(tok[i] >= '0' && tok[i] <= '9') i++;
+    int dur = (i > 0) ? atoi(tok) : default_dur;
+    if(dur <= 0) dur = default_dur > 0 ? default_dur : 8;
+
+    bool is_rest = (tok[i] == 'P' || tok[i] == 'p');
+    float freq = 0.0f;
+
+    if(is_rest) {
+        i++; /* consume the P */
+    } else {
+        char letter = tok[i];
+        if(letter >= 'a' && letter <= 'g') letter = (char)(letter - 'a' + 'A');
+        int semitone;
+        switch(letter) {
+        case 'C': semitone = 0;  break;
+        case 'D': semitone = 2;  break;
+        case 'E': semitone = 4;  break;
+        case 'F': semitone = 5;  break;
+        case 'G': semitone = 7;  break;
+        case 'A': semitone = 9;  break;
+        case 'B': semitone = 11; break;
+        default:  semitone = -1; break;
+        }
+        if(semitone < 0) return false; /* unrecognized token */
+        i++;
+        int accidental = 0;
+        if(tok[i] == '#')      { accidental = 1;  i++; }
+        else if(tok[i] == 'b') { accidental = -1; i++; }
+
+        int octave = default_octave > 0 ? default_octave : 5;
+        if(tok[i] >= '0' && tok[i] <= '9') {
+            octave = atoi(tok + i);
+            while(tok[i] >= '0' && tok[i] <= '9') i++;
+        }
+
+        int midi = (octave + 1) * 12 + semitone + accidental;
+        if(midi < 0) midi = 0;
+        if(midi > 127) midi = 127;
+        freq = NOTE_FREQ_HZ[midi];
+    }
+
+    /* FMF dotted notes: each trailing '.' multiplies the length by 1.5
+       (compounding — "1.5^n" per the format spec, not the additive
+       1+0.5+0.25… rule used in standard music notation). */
+    int dots = 0;
+    while(tok[i] == '.') { dots++; i++; }
+
+    if(bpm <= 0) bpm = 120;
+    /* whole note = 240/BPM seconds; this note = that / duration-denominator */
+    float seconds = 240.0f / ((float)bpm * (float)dur);
+    for(int d = 0; d < dots; d++) seconds *= 1.5f;
+    int ms = (int)(seconds * 1000.0f + 0.5f);
+    if(ms < 1) ms = 1;
+
+    *out_freq = freq;
+    *out_rest = is_rest;
+    *out_ms   = ms;
+    return true;
+}
+
+/* Advance the tune; only actually does work once the current note's
+   duration has elapsed. Timed against the real-time tick counter rather
+   than a frame count — the main loop's frame period is "furi_delay_ms(23)
+   plus whatever rendering/physics took", which is never exactly 23ms, so
+   counting frames drifts the tempo. furi_get_tick() sidesteps that. */
+static void music_update(GeoApp* app) {
+    if(!app->music_active) return;
+    uint32_t now = furi_get_tick();
+    if(now < app->music_next_tick) return;
+
+    char tok[MUSIC_TOKEN_MAX];
+    if(!music_next_token(app->music_notes_src, &app->music_cursor, tok, sizeof(tok))) {
+        app->music_next_tick = now + 1; /* skip a bad/empty token, retry shortly */
+        return;
+    }
+
+    float freq; bool rest; int ms;
+    if(!music_parse_token(tok, app->music_src_duration, app->music_src_octave,
+                          app->music_src_bpm, &freq, &rest, &ms)) {
+        app->music_next_tick = now + 1;
+        return;
+    }
+
+    app->music_next_tick = now + (uint32_t)ms;
+    app->music_cur_freq  = freq;
+    app->music_cur_rest  = rest;
+
+    if(!app->music_acquired) {
+        if(furi_hal_speaker_acquire(1000)) app->music_acquired = true;
+    }
+    if(app->music_acquired) {
+        if(rest) furi_hal_speaker_stop();
+        else furi_hal_speaker_start(freq, MUSIC_VOLUME);
+    }
+}
+
+/* Silence the speaker (e.g. on pause/death/win) without releasing
+   ownership, so resuming is instant. */
+static void music_pause(GeoApp* app) {
+    if(app->music_acquired) furi_hal_speaker_stop();
+    app->music_pause_started = furi_get_tick();
+}
+
+/* Re-sound whatever note was playing when paused, and push the next-note
+   deadline forward by however long we were paused so the remaining note
+   length (and the rest of the tune) isn't shortened by the pause. */
+static void music_resume(GeoApp* app) {
+    if(!app->music_active) return;
+    app->music_next_tick += furi_get_tick() - app->music_pause_started;
+    if(!app->music_acquired) {
+        if(furi_hal_speaker_acquire(1000)) app->music_acquired = true;
+    }
+    if(app->music_acquired && !app->music_cur_rest) {
+        furi_hal_speaker_start(app->music_cur_freq, MUSIC_VOLUME);
+    }
+}
+
+/* Fully give up the speaker (leaving gameplay for a menu, or app exit). */
+static void music_release(GeoApp* app) {
+    if(app->music_acquired) {
+        furi_hal_speaker_stop();
+        furi_hal_speaker_release();
+        app->music_acquired = false;
+    }
+}
+
+/* Pull the BPM/Duration/Octave header fields and the Notes: token list out
+   of a track exported in real Flipper Music Format (as embedded in
+   lib/data/music.c) — distinct from the simplified "MUSIC BPM=.. / NOTE .."
+   directives level files use, hence the separate parser. */
+static void music_load_fmf(const char* fmf, int16_t* bpm, int16_t* duration,
+                            int16_t* octave, const char** notes) {
+    *bpm = 0; *duration = 8; *octave = 5; *notes = "";
+    const char* p;
+    if((p = strstr(fmf, "BPM:")))      *bpm      = (int16_t)atoi(p + 4);
+    if((p = strstr(fmf, "Duration:"))) *duration = (int16_t)atoi(p + 9);
+    if((p = strstr(fmf, "Octave:")))   *octave   = (int16_t)atoi(p + 7);
+    if((p = strstr(fmf, "Notes:")))    *notes    = p + 6;
+}
+
+/* Point the shared player at the current level's embedded tune (called
+   from game_reset whenever a level (re)starts). Silences whatever note
+   the previous track (the menu tune) left sounding — otherwise, if a
+   note happened to be mid-tone at the switch, it would keep ringing
+   until the new track's own playback got around to overwriting it (or
+   forever, if the level has no music of its own). */
+static void music_use_level_track(GeoApp* app) {
+    if(app->music_acquired) furi_hal_speaker_stop();
+    app->music_notes_src    = app->level.music_notes;
+    app->music_src_bpm      = app->level.music_bpm;
+    app->music_src_duration = app->level.music_duration;
+    app->music_src_octave   = app->level.music_octave;
+    app->music_active       = (app->music_src_bpm > 0 && app->music_notes_src[0] != '\0');
+    app->music_cursor       = 0;
+    app->music_next_tick    = furi_get_tick();
+    app->music_cur_freq     = 0.0f;
+    app->music_cur_rest     = true;
+}
+
+/* Point the shared player at the main-menu tune (splash, main menu, skins,
+   official/custom level lists — anywhere outside of gameplay). Same
+   stuck-note guard as music_use_level_track, mirrored for the reverse
+   switch (leaving a level back to a menu). */
+static void music_use_menu_track(GeoApp* app) {
+    static const char* notes;
+    static int16_t     bpm, duration, octave;
+    static bool         parsed = false;
+    if(!parsed) {
+        music_load_fmf(MAIN_MENU_MUSIC, &bpm, &duration, &octave, &notes);
+        parsed = true;
+    }
+    if(app->music_acquired) furi_hal_speaker_stop();
+    app->music_notes_src    = notes;
+    app->music_src_bpm      = bpm;
+    app->music_src_duration = duration;
+    app->music_src_octave   = octave;
+    app->music_active       = (bpm > 0 && notes[0] != '\0');
+    app->music_cursor       = 0;
+    app->music_next_tick    = furi_get_tick();
+    app->music_cur_freq     = 0.0f;
+    app->music_cur_rest     = true;
 }
 
 /* ─── Rendering ──────────────────────────────────────────────────── */
@@ -1892,11 +2215,43 @@ int32_t geoflip(void* p) {
             if(app->dead_timer >= 63) game_restart_current_level(app);
         }
 
+        /* ── music state machine ──
+           Driven by prev_state (last frame) vs app->state (this frame,
+           after input/game_update/restart above have settled it). Held
+           off while intro_active so the level tune starts once the
+           slide-in intro finishes, not the instant GAMESTATE_PLAYING
+           begins. Outside of gameplay (main menu/skins/level lists) the
+           main-menu tune plays continuously — see music_use_menu_track —
+           right up until a level starts. Held off during GAMESTATE_SPLASH
+           too, so it only kicks in once the main menu itself is shown. */
+        bool in_level = (app->state == GAMESTATE_PLAYING || app->state == GAMESTATE_PAUSE ||
+                          app->state == GAMESTATE_DEAD || app->state == GAMESTATE_WIN);
+        if(in_level) {
+            app->music_is_menu = false;
+            if(app->state == GAMESTATE_PLAYING && !app->intro_active) {
+                if(prev_state == GAMESTATE_PAUSE) music_resume(app);
+                music_update(app);
+            } else if(prev_state == GAMESTATE_PLAYING &&
+                      (app->state == GAMESTATE_PAUSE || app->state == GAMESTATE_DEAD ||
+                       app->state == GAMESTATE_WIN)) {
+                music_pause(app); /* stop the tone, keep the speaker for a quick resume */
+            }
+        } else if(app->state == GAMESTATE_SPLASH) {
+            app->music_is_menu = false; /* not started yet — wait for the main menu */
+        } else {
+            if(!app->music_is_menu) {
+                music_use_menu_track(app); /* just landed on a menu screen — (re)start the tune */
+                app->music_is_menu = true;
+            }
+            music_update(app);
+        }
+
         view_port_update(vp);
         prev_state = app->state;
         furi_delay_ms(23); /* must be 23 */
     }
 
+    music_release(app);
     gui_remove_view_port(gui, vp);
     view_port_free(vp);
     furi_message_queue_free(queue);

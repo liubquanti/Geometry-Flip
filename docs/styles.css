@@ -188,6 +188,112 @@ body {
   width: 100%;
 }
 
+.music-editor {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+}
+
+.music-editor-inner {
+  width: min(560px, 92vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  border: 2px solid var(--orange);
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--black);
+}
+
+.music-editor-title {
+  font-size: 26px;
+  letter-spacing: 0.18em;
+}
+
+.music-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.music-notes-field textarea {
+  width: 100%;
+  resize: vertical;
+  border: 2px solid var(--orange);
+  background: var(--black);
+  color: var(--orange);
+  padding: 8px 10px;
+  line-height: 1.4;
+}
+
+.music-notes-field textarea::selection {
+  background: var(--orange);
+  color: var(--black);
+}
+
+.music-hint {
+  font-size: 16px;
+  letter-spacing: 0.05em;
+  line-height: 1.4;
+  opacity: 0.85;
+}
+
+.music-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.music-controls button {
+  flex: 1;
+  height: 38px;
+  min-width: 90px;
+}
+
+.midi-import-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-top: 2px solid var(--orange);
+  padding-top: 14px;
+}
+
+.midi-import-title {
+  font-size: 18px;
+  letter-spacing: 0.1em;
+  opacity: 0.9;
+}
+
+.midi-import-grid {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.midi-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+}
+
+.midi-checkbox-row input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--orange);
+}
+
+.midi-import-stats {
+  font-size: 16px;
+  letter-spacing: 0.04em;
+  opacity: 0.85;
+}
+
 button,
 input,
 select {

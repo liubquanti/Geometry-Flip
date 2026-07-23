@@ -2,6 +2,7 @@ const ORANGE = '#ff8200';
 const BLACK = '#000000';
 const GRID = 8;
 const MAX_OBJECTS = 512;
+const MUSIC_NOTES_MAX = 900; // must match MUSIC_NOTES_MAX in lib/geoflip.c
 const AUTO_LENGTH_PADDING = 10;
 const PANELS = {
   top: 136,
@@ -48,6 +49,23 @@ const el = {
   iconCopy: document.getElementById('iconCopy'),
   iconCode: document.getElementById('iconCode'),
   iconClose: document.getElementById('iconClose'),
+  musicBtn: document.getElementById('musicBtn'),
+  musicEditor: document.getElementById('musicEditor'),
+  musicBpm: document.getElementById('musicBpm'),
+  musicDuration: document.getElementById('musicDuration'),
+  musicOctave: document.getElementById('musicOctave'),
+  musicNotes: document.getElementById('musicNotes'),
+  musicPlayBtn: document.getElementById('musicPlayBtn'),
+  musicStopBtn: document.getElementById('musicStopBtn'),
+  musicCloseBtn: document.getElementById('musicCloseBtn'),
+  musicImportMidiBtn: document.getElementById('musicImportMidiBtn'),
+  midiFileInput: document.getElementById('midiFileInput'),
+  midiImportPanel: document.getElementById('midiImportPanel'),
+  midiImportFileName: document.getElementById('midiImportFileName'),
+  midiTrackSelect: document.getElementById('midiTrackSelect'),
+  midiChannelSelect: document.getElementById('midiChannelSelect'),
+  midiSkipDrums: document.getElementById('midiSkipDrums'),
+  midiImportStats: document.getElementById('midiImportStats'),
 };
 
 const ctx = el.canvas.getContext('2d');
@@ -140,6 +158,10 @@ function blankLevel() {
     length: 2000,
     objects: [],
     decorations: [],
+    musicBpm: 0,
+    musicDuration: 8,
+    musicOctave: 5,
+    musicNotes: '',
   };
 }
 
@@ -555,6 +577,12 @@ function applyLevelToUI() {
   el.levelName.value = state.level.name;
   el.bgStyle.value = state.level.bgStyle;
   el.difficulty.value = state.level.difficulty || 'Easy';
+  if (el.musicBpm) el.musicBpm.value = state.level.musicBpm > 0 ? state.level.musicBpm : 120;
+  if (el.musicDuration) el.musicDuration.value = String(state.level.musicDuration || 8);
+  if (el.musicOctave) el.musicOctave.value = state.level.musicOctave || 5;
+  if (el.musicNotes) el.musicNotes.value = state.level.musicNotes || '';
+  midiParsed = null;
+  if (el.midiImportPanel) el.midiImportPanel.hidden = true;
   applyAutoLength(true);
   updateSelectionInfo();
   render();
@@ -596,6 +624,17 @@ function parseLevel(text) {
       level.speed = Number(parts[1]) || level.speed;
     } else if (key === 'GRAVITY' && parts[1]) {
       level.gravityPct = Number(parts[1]) || level.gravityPct;
+    } else if (key === 'MUSIC') {
+      const body = raw.slice(raw.indexOf(' ') + 1);
+      const bpmMatch = body.match(/BPM=(-?\d+)/);
+      const durMatch = body.match(/DURATION=(-?\d+)/);
+      const octMatch = body.match(/OCTAVE=(-?\d+)/);
+      if (bpmMatch) level.musicBpm = Number(bpmMatch[1]) || 0;
+      if (durMatch) level.musicDuration = Number(durMatch[1]) || level.musicDuration;
+      if (octMatch) level.musicOctave = Number(octMatch[1]) || level.musicOctave;
+    } else if (key === 'NOTE') {
+      const chunk = raw.slice(raw.indexOf(' ') + 1).trim();
+      if (chunk) level.musicNotes = level.musicNotes ? `${level.musicNotes}, ${chunk}` : chunk;
     } else if (key === 'OBJ' && parts.length >= 4) {
       const type = parts[1].toUpperCase();
       const gx = Number(parts[2]);
@@ -621,6 +660,26 @@ function parseLevel(text) {
   return level;
 }
 
+/* Splits a comma-separated note list into several short lines (each safely
+   under the firmware parser's per-line buffer) that get re-joined into one
+   note list on load via consecutive NOTE directives. */
+function chunkNotes(notesStr, maxLen = 100) {
+  const tokens = notesStr.split(',').map((s) => s.trim()).filter(Boolean);
+  const lines = [];
+  let cur = '';
+  for (const tok of tokens) {
+    const candidate = cur ? `${cur}, ${tok}` : tok;
+    if (cur && candidate.length > maxLen) {
+      lines.push(cur);
+      cur = tok;
+    } else {
+      cur = candidate;
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
 function serializeLevel(level) {
   const autoLength = computeAutoLength(level);
   const lines = [
@@ -629,9 +688,19 @@ function serializeLevel(level) {
     `BG ${level.bgStyle}`,
     `DIFICULTY ${level.difficulty || 'Easy'}`,
     `LENGTH ${autoLength}`,
-    '',
-    '# OBJ <TYPE> <GX> <GY> [ROT]',
   ];
+
+  if (level.musicNotes && level.musicNotes.trim()) {
+    const bpm = level.musicBpm > 0 ? level.musicBpm : 120;
+    const dur = level.musicDuration || 8;
+    const oct = level.musicOctave || 5;
+    lines.push('', '# MUSIC BPM=<n> DURATION=<denominator> OCTAVE=<n>', `MUSIC BPM=${bpm} DURATION=${dur} OCTAVE=${oct}`);
+    for (const noteLine of chunkNotes(level.musicNotes)) {
+      lines.push(`NOTE ${noteLine}`);
+    }
+  }
+
+  lines.push('', '# OBJ <TYPE> <GX> <GY> [ROT]');
 
   for (const obj of level.objects) {
     const rot = normalizeRotation(obj.rot || 0);
@@ -1048,6 +1117,499 @@ function syncInputsToLevel() {
   render();
 }
 
+function syncMusicToLevel() {
+  if (!el.musicBpm) return;
+  const oldBpm = state.level.musicBpm || 0;
+  const oldDur = state.level.musicDuration || 8;
+  const oldOct = state.level.musicOctave || 5;
+  const oldNotes = state.level.musicNotes || '';
+
+  const notes = el.musicNotes.value.trim();
+  const newBpm = notes ? (Number(el.musicBpm.value) || 120) : 0;
+  const newDur = Number(el.musicDuration.value) || 8;
+  const newOct = Number(el.musicOctave.value) || 5;
+
+  if (oldBpm !== newBpm || oldDur !== newDur || oldOct !== newOct || oldNotes !== notes) {
+    pushHistory();
+    state.level.musicBpm = newBpm;
+    state.level.musicDuration = newDur;
+    state.level.musicOctave = newOct;
+    state.level.musicNotes = notes;
+    setDirty(true);
+  }
+}
+
+function openMusicEditor() {
+  if (!el.musicEditor) return;
+  el.musicEditor.hidden = false;
+}
+
+function closeMusicEditor() {
+  if (!el.musicEditor) return;
+  stopMusicPreview();
+  el.musicEditor.hidden = true;
+}
+
+/* ─── Music preview (Web Audio) ───────────────────────────────────────
+   Mirrors the firmware's note-token grammar so what you hear here matches
+   what will play on-device: [duration]NoteLetter[#|b][octave], or
+   [duration]P for a rest. Missing duration/octave fall back to the
+   BPM/Duration/Octave fields. Purely a client-side approximation (square
+   wave) for authoring convenience — not a byte-exact emulation of the
+   Flipper speaker. */
+const NOTE_SEMITONE = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+let previewAudioCtx = null;
+let previewOscillators = [];
+let previewStopTimer = null;
+
+function parseNoteTokenForPreview(rawTok, defaultDur, defaultOctave) {
+  const tok = rawTok.trim();
+  if (!tok) return null;
+  let i = 0;
+  while (i < tok.length && tok[i] >= '0' && tok[i] <= '9') i++;
+  let dur = i > 0 ? parseInt(tok.slice(0, i), 10) : defaultDur;
+  if (!dur || dur <= 0) dur = defaultDur || 8;
+
+  let rest = false;
+  let freq = 0;
+
+  if (tok[i] === 'P' || tok[i] === 'p') {
+    rest = true;
+    i++;
+  } else {
+    const letter = (tok[i] || '').toUpperCase();
+    if (!(letter in NOTE_SEMITONE)) return null;
+    i++;
+    let accidental = 0;
+    if (tok[i] === '#') { accidental = 1; i++; }
+    else if (tok[i] === 'b') { accidental = -1; i++; }
+
+    let octave = defaultOctave || 5;
+    let j = i;
+    while (j < tok.length && tok[j] >= '0' && tok[j] <= '9') j++;
+    if (j > i) { octave = parseInt(tok.slice(i, j), 10); i = j; }
+
+    const midi = (octave + 1) * 12 + NOTE_SEMITONE[letter] + accidental;
+    freq = 440 * Math.pow(2, (midi - 69) / 12);
+  }
+
+  // FMF dotted notes: each trailing '.' multiplies the length by 1.5,
+  // compounding (1.5^n), matching the format spec.
+  let dots = 0;
+  while (tok[i] === '.') { dots++; i++; }
+
+  return { rest, dur, freq, dots };
+}
+
+function stopMusicPreview() {
+  for (const osc of previewOscillators) {
+    try { osc.stop(); } catch (e) { /* already stopped */ }
+  }
+  previewOscillators = [];
+  if (previewStopTimer) { clearTimeout(previewStopTimer); previewStopTimer = null; }
+  if (el.musicPlayBtn) el.musicPlayBtn.textContent = 'PLAY';
+}
+
+function playMusicPreview() {
+  if (!el.musicNotes) return;
+  stopMusicPreview();
+
+  const tokens = el.musicNotes.value.split(',').map((s) => s.trim()).filter(Boolean);
+  if (!tokens.length) return;
+
+  if (!previewAudioCtx) previewAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const ctx = previewAudioCtx;
+  const bpm = Number(el.musicBpm.value) || 120;
+  const defDur = Number(el.musicDuration.value) || 8;
+  const defOct = Number(el.musicOctave.value) || 5;
+
+  let t = ctx.currentTime + 0.05;
+  for (const rawTok of tokens) {
+    const note = parseNoteTokenForPreview(rawTok, defDur, defOct);
+    if (!note) continue;
+    const seconds = (240 / (bpm * note.dur)) * Math.pow(1.5, note.dots || 0);
+    if (!note.rest && note.freq > 0) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(note.freq, t);
+      gain.gain.setValueAtTime(0.15, t);
+      gain.gain.setValueAtTime(0.15, Math.max(t, t + seconds - 0.02));
+      gain.gain.linearRampToValueAtTime(0.0001, t + seconds);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + seconds);
+      previewOscillators.push(osc);
+    }
+    t += seconds;
+  }
+
+  el.musicPlayBtn.textContent = 'PLAYING…';
+  const totalMs = Math.max(0, (t - ctx.currentTime) * 1000);
+  previewStopTimer = setTimeout(() => {
+    if (el.musicPlayBtn) el.musicPlayBtn.textContent = 'PLAY';
+    previewOscillators = [];
+  }, totalMs);
+}
+
+/* ─── MIDI import ──────────────────────────────────────────────────────
+   Reads a standard MIDI file (SMF) and lets the user pick which track
+   and channel to import (defaulting to the track with the most note-on
+   events, with a "skip drum channel" option on by default), since a
+   Flipper's beeper can only sound one pitch at a time and auto-guessing
+   "the melody" from a multi-track score is unreliable. Chords within the
+   selected track/channel are reduced to a single monophonic line with
+   last-note-priority: a new note interrupts whatever was sounding, and
+   when it ends playback resumes whatever note was interrupted (if still
+   held) rather than silence — the same behavior as a synth's mono mode.
+   Each resulting note/rest length is quantized to the nearest FMF
+   duration+dots combination and emitted as an FMF-style note list
+   compatible with the in-game player. */
+
+class MidiReader {
+  constructor(buf) {
+    this.view = new DataView(buf);
+    this.pos = 0;
+  }
+  u8() { return this.view.getUint8(this.pos++); }
+  u16() { const v = this.view.getUint16(this.pos); this.pos += 2; return v; }
+  u32() { const v = this.view.getUint32(this.pos); this.pos += 4; return v; }
+  bytes(n) { const arr = new Uint8Array(this.view.buffer, this.view.byteOffset + this.pos, n); this.pos += n; return arr; }
+  str(n) { let s = ''; for (let i = 0; i < n; i++) s += String.fromCharCode(this.u8()); return s; }
+  varLen() {
+    let value = 0;
+    for (let i = 0; i < 4; i++) {
+      const b = this.u8();
+      value = (value << 7) | (b & 0x7f);
+      if (!(b & 0x80)) break;
+    }
+    return value;
+  }
+  eof() { return this.pos >= this.view.byteLength; }
+}
+
+function parseMidiFile(buf) {
+  const r = new MidiReader(buf);
+  if (r.str(4) !== 'MThd') throw new Error('Not a MIDI file (missing MThd header).');
+  const headerLen = r.u32();
+  const format = r.u16();
+  const ntrks = r.u16();
+  const division = r.u16();
+  if (division & 0x8000) throw new Error('SMPTE time-coded MIDI files are not supported.');
+  const ticksPerQuarter = division || 96;
+  r.pos += Math.max(0, headerLen - 6);
+
+  const tracks = [];
+  for (let t = 0; t < ntrks && !r.eof(); t++) {
+    const id = r.str(4);
+    const len = r.u32();
+    const trackEnd = r.pos + len;
+    if (id !== 'MTrk') { r.pos = trackEnd; continue; }
+
+    const events = [];
+    let tick = 0;
+    let runningStatus = 0;
+    let trackName = '';
+    while (r.pos < trackEnd) {
+      tick += r.varLen();
+      let statusByte = r.u8();
+      if (statusByte < 0x80) {
+        r.pos--; // this byte is actually the first data byte of a running-status event
+        statusByte = runningStatus;
+      } else if (statusByte < 0xf0) {
+        runningStatus = statusByte;
+      }
+
+      if (statusByte === 0xff) {
+        const metaType = r.u8();
+        const metaLen = r.varLen();
+        const data = r.bytes(metaLen);
+        if (metaType === 0x51 && metaLen === 3) {
+          const usPerQuarter = (data[0] << 16) | (data[1] << 8) | data[2];
+          events.push({ tick, type: 'tempo', usPerQuarter });
+        } else if ((metaType === 0x03 || metaType === 0x04) && !trackName) {
+          let s = '';
+          for (let i = 0; i < data.length; i++) s += String.fromCharCode(data[i]);
+          trackName = s.trim();
+        }
+      } else if (statusByte === 0xf0 || statusByte === 0xf7) {
+        r.pos += r.varLen();
+      } else if (statusByte >= 0x80 && statusByte < 0xf0) {
+        const kind = statusByte & 0xf0;
+        const channel = statusByte & 0x0f;
+        if (kind === 0x90 || kind === 0x80) {
+          const note = r.u8();
+          const vel = r.u8();
+          if (kind === 0x90 && vel > 0) events.push({ tick, type: 'on', note, channel });
+          else events.push({ tick, type: 'off', note, channel });
+        } else if (kind === 0xa0 || kind === 0xb0 || kind === 0xe0) {
+          r.pos += 2;
+        } else if (kind === 0xc0 || kind === 0xd0) {
+          r.pos += 1;
+        }
+      } else {
+        break; // unrecognized status byte — bail out of this track rather than desync
+      }
+    }
+    r.pos = trackEnd;
+    tracks.push({ events, name: trackName });
+  }
+
+  return { format, ticksPerQuarter, tracks };
+}
+
+/* Collapses one track's (already channel-filtered) note-on/off events
+   into non-overlapping segments of a single active pitch, using
+   last-note-priority: a new note-on interrupts and silences whatever was
+   previously sounding (pushing it onto a stack), and when the current
+   note's matching note-off arrives, playback resumes the most recently
+   interrupted note that's still held (if any). Matches the mono-voice
+   behavior of a real synthesizer far better than picking the single
+   highest pitch on overlap would. Assumes `events` is already in
+   chronological tick order, which a raw MIDI track stream always is. */
+function reduceMonophonic(events) {
+  let current = null;
+  const stack = [];
+  const segments = [];
+
+  for (const e of events) {
+    if (e.type === 'on') {
+      if (current) {
+        segments.push({ note: current.note, start: current.start, end: e.tick });
+        stack.push(current);
+      }
+      current = { note: e.note, start: e.tick, channel: e.channel };
+    } else if (e.type === 'off') {
+      if (current && current.note === e.note && current.channel === e.channel) {
+        segments.push({ note: current.note, start: current.start, end: e.tick });
+        current = stack.length ? stack.pop() : null;
+        if (current) current.start = e.tick;
+      } else {
+        const idx = stack.findIndex((s) => s.note === e.note && s.channel === e.channel);
+        if (idx >= 0) stack.splice(idx, 1);
+      }
+    }
+  }
+  if (current) {
+    const lastTick = events.length ? events[events.length - 1].tick : current.start;
+    segments.push({ note: current.note, start: current.start, end: Math.max(lastTick, current.start + 1) });
+  }
+
+  segments.sort((a, b) => a.start - b.start);
+  return segments.filter((s) => s.end > s.start);
+}
+
+const MIDI_SEMITONE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+function midiNoteToName(midiNote) {
+  const semitone = ((midiNote % 12) + 12) % 12;
+  const octave = Math.floor(midiNote / 12) - 1;
+  return { name: MIDI_SEMITONE_NAMES[semitone], octave };
+}
+
+const FMF_DURATIONS = [1, 2, 4, 8, 16, 32];
+const FMF_DOT_OPTIONS = [0, 1, 2, 3];
+
+/* Finds the [duration denominator, dot count] pair whose length (in
+   quarter-note units) is closest to `quarterLen`. */
+function quantizeDuration(quarterLen) {
+  let best = { d: 8, dots: 0, diff: Infinity };
+  for (const d of FMF_DURATIONS) {
+    const base = 4 / d;
+    for (const dots of FMF_DOT_OPTIONS) {
+      const len = base * Math.pow(1.5, dots);
+      const diff = Math.abs(len - quarterLen);
+      if (diff < best.diff) best = { d, dots, diff };
+    }
+  }
+  return best;
+}
+
+function trackNoteOnCount(track) {
+  return track.events.reduce((n, e) => n + (e.type === 'on' ? 1 : 0), 0);
+}
+
+/* Scans every track for the first tempo meta-event (falling back to the
+   MIDI spec default of 120 BPM) to seed the BPM field when a file is
+   first imported. */
+function midiDefaultBpm(midi) {
+  let usPerQuarter = 500000;
+  for (const t of midi.tracks) {
+    const tempoEvent = t.events.find((e) => e.type === 'tempo');
+    if (tempoEvent) { usPerQuarter = tempoEvent.usPerQuarter; break; }
+  }
+  return Math.max(20, Math.min(400, Math.round(60000000 / usPerQuarter)));
+}
+
+/* Converts one track (filtered to a channel selection) into { duration,
+   octave, notes, noteCount, usedCount, truncated }, or null if nothing in
+   that track/channel is usable. Silence gaps between notes (including
+   before the first note) become explicit rest tokens. */
+function buildFmfFromTrack(track, ticksPerQuarter, channelVal, skipDrums) {
+  const filtered = track.events.filter((e) => {
+    if (e.type !== 'on' && e.type !== 'off') return false;
+    if (channelVal !== 'all' && e.channel !== Number(channelVal)) return false;
+    if (skipDrums && e.channel === 9) return false;
+    return true;
+  });
+
+  const segments = reduceMonophonic(filtered);
+  if (!segments.length) return null;
+
+  const raw = segments.map((s) => {
+    const d = quantizeDuration(Math.max((s.end - s.start) / ticksPerQuarter, 4 / 32));
+    const { name, octave } = midiNoteToName(s.note);
+    return { start: s.start, end: s.end, d, name, octave };
+  });
+
+  // Use the most common duration/octave as the level defaults so most
+  // tokens can omit them, keeping the exported note list compact.
+  const durCounts = new Map();
+  const octCounts = new Map();
+  for (const r of raw) {
+    durCounts.set(r.d.d, (durCounts.get(r.d.d) || 0) + 1);
+    octCounts.set(r.octave, (octCounts.get(r.octave) || 0) + 1);
+  }
+  const pickMode = (counts, fallback) => {
+    let bestKey = fallback, bestN = -1;
+    for (const [key, n] of counts) if (n > bestN) { bestN = n; bestKey = key; }
+    return bestKey;
+  };
+  const defaultDur = pickMode(durCounts, 8);
+  const defaultOctave = pickMode(octCounts, 5);
+
+  // minTicks: gaps shorter than a 1/32 note are rounding noise, not rests.
+  const minTicks = Math.max(1, Math.round(ticksPerQuarter / 32));
+  const tokens = [];
+  let cursor = 0;
+  for (const r of raw) {
+    if (r.start - cursor > minTicks) {
+      const rd = quantizeDuration(Math.max((r.start - cursor) / ticksPerQuarter, 4 / 32));
+      const durStr = rd.d === defaultDur ? '' : String(rd.d);
+      tokens.push(`${durStr}P${'.'.repeat(rd.dots)}`);
+    }
+    const durStr = r.d.d === defaultDur ? '' : String(r.d.d);
+    const octStr = r.octave === defaultOctave ? '' : String(r.octave);
+    tokens.push(`${durStr}${r.name}${octStr}${'.'.repeat(r.d.dots)}`);
+    cursor = r.end;
+  }
+
+  let notes = tokens.join(', ');
+  let truncated = false;
+  let usedCount = tokens.length;
+  if (notes.length > MUSIC_NOTES_MAX) {
+    let acc = '';
+    usedCount = 0;
+    for (const tok of tokens) {
+      const candidate = acc ? `${acc}, ${tok}` : tok;
+      if (candidate.length > MUSIC_NOTES_MAX) break;
+      acc = candidate;
+      usedCount++;
+    }
+    notes = acc;
+    truncated = usedCount < tokens.length;
+  }
+
+  return { duration: defaultDur, octave: defaultOctave, notes, noteCount: tokens.length, usedCount, truncated };
+}
+
+let midiParsed = null; // the currently-loaded MIDI file, or null
+
+function populateMidiTrackSelect(midi) {
+  el.midiTrackSelect.innerHTML = '';
+  let bestIdx = 0, bestCount = -1;
+  midi.tracks.forEach((t, i) => {
+    const noteCount = trackNoteOnCount(t);
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = `${i + 1}. ${t.name || `Track ${i + 1}`} (${noteCount} notes)`;
+    el.midiTrackSelect.appendChild(opt);
+    if (noteCount > bestCount) { bestCount = noteCount; bestIdx = i; }
+  });
+  el.midiTrackSelect.value = String(bestIdx);
+}
+
+function populateMidiChannelSelect(track) {
+  const channels = new Set();
+  for (const e of track.events) {
+    if (e.type === 'on' || e.type === 'off') channels.add(e.channel);
+  }
+  el.midiChannelSelect.innerHTML = '';
+  const allOpt = document.createElement('option');
+  allOpt.value = 'all';
+  allOpt.textContent = 'All channels';
+  el.midiChannelSelect.appendChild(allOpt);
+  [...channels].sort((a, b) => a - b).forEach((c) => {
+    const opt = document.createElement('option');
+    opt.value = String(c);
+    opt.textContent = `Channel ${c + 1}${c === 9 ? ' (drums)' : ''}`;
+    el.midiChannelSelect.appendChild(opt);
+  });
+  el.midiChannelSelect.value = 'all';
+}
+
+/* Re-runs the conversion for the currently selected track/channel/skip-
+   drums options and writes the result straight into the music fields —
+   the notes textarea doubles as the live preview, same as manual
+   editing. Called on import and whenever an import option changes. */
+function regenerateMidiImport() {
+  if (!midiParsed || !el.midiTrackSelect) return;
+  const track = midiParsed.tracks[Number(el.midiTrackSelect.value)];
+  if (!track) return;
+  const channelVal = el.midiChannelSelect.value;
+  const skipDrums = el.midiSkipDrums.checked;
+
+  const result = buildFmfFromTrack(track, midiParsed.ticksPerQuarter, channelVal, skipDrums);
+  if (!result) {
+    el.musicNotes.value = '';
+    syncMusicToLevel();
+    if (el.midiImportStats) el.midiImportStats.textContent = 'No notes in this track/channel.';
+    return;
+  }
+
+  el.musicDuration.value = String(result.duration);
+  el.musicOctave.value = String(result.octave);
+  el.musicNotes.value = result.notes;
+  syncMusicToLevel();
+
+  if (el.midiImportStats) {
+    let msg = `${result.usedCount} notes · default ${result.duration}/${result.octave}`;
+    if (result.truncated) {
+      msg += ` · trimmed from ${result.noteCount} notes (${MUSIC_NOTES_MAX}-char limit)`;
+    }
+    el.midiImportStats.textContent = msg;
+  }
+}
+
+function importMidiFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const midi = parseMidiFile(reader.result);
+      const totalNotes = midi.tracks.reduce((n, t) => n + trackNoteOnCount(t), 0);
+      if (totalNotes <= 0) throw new Error('No notes found in this MIDI file.');
+
+      midiParsed = midi;
+      el.musicBpm.value = String(midiDefaultBpm(midi));
+      populateMidiTrackSelect(midi);
+      populateMidiChannelSelect(midi.tracks[Number(el.midiTrackSelect.value)]);
+      if (el.midiSkipDrums) el.midiSkipDrums.checked = true;
+      if (el.midiImportFileName) el.midiImportFileName.textContent = file.name;
+      if (el.midiImportPanel) el.midiImportPanel.hidden = false;
+      regenerateMidiImport();
+    } catch (error) {
+      alert(`Failed to import MIDI: ${error.message}`);
+    } finally {
+      el.midiFileInput.value = '';
+    }
+  };
+  reader.onerror = () => {
+    alert('Failed to read the MIDI file.');
+    el.midiFileInput.value = '';
+  };
+  reader.readAsArrayBuffer(file);
+}
+
 function createPalette() {
   el.palette.innerHTML = '';
   for (const item of TYPES) {
@@ -1151,6 +1713,26 @@ el.levelName.addEventListener('input', syncInputsToLevel);
 el.bgStyle.addEventListener('change', syncInputsToLevel);
 if (el.difficulty) el.difficulty.addEventListener('change', syncInputsToLevel);
 el.levelLength.addEventListener('input', syncInputsToLevel);
+
+if (el.musicBtn) el.musicBtn.addEventListener('click', openMusicEditor);
+if (el.musicCloseBtn) el.musicCloseBtn.addEventListener('click', closeMusicEditor);
+if (el.musicPlayBtn) el.musicPlayBtn.addEventListener('click', playMusicPreview);
+if (el.musicStopBtn) el.musicStopBtn.addEventListener('click', stopMusicPreview);
+if (el.musicImportMidiBtn) el.musicImportMidiBtn.addEventListener('click', () => el.midiFileInput.click());
+if (el.midiFileInput) el.midiFileInput.addEventListener('change', () => {
+  const file = el.midiFileInput.files && el.midiFileInput.files[0];
+  if (file) importMidiFile(file);
+});
+if (el.midiTrackSelect) el.midiTrackSelect.addEventListener('change', () => {
+  populateMidiChannelSelect(midiParsed.tracks[Number(el.midiTrackSelect.value)]);
+  regenerateMidiImport();
+});
+if (el.midiChannelSelect) el.midiChannelSelect.addEventListener('change', regenerateMidiImport);
+if (el.midiSkipDrums) el.midiSkipDrums.addEventListener('change', regenerateMidiImport);
+if (el.musicBpm) el.musicBpm.addEventListener('input', syncMusicToLevel);
+if (el.musicDuration) el.musicDuration.addEventListener('change', syncMusicToLevel);
+if (el.musicOctave) el.musicOctave.addEventListener('input', syncMusicToLevel);
+if (el.musicNotes) el.musicNotes.addEventListener('input', syncMusicToLevel);
 el.cameraX.addEventListener('input', () => {
   state.cameraX = clamp(Number(el.cameraX.value) || 0, 0, Number(el.cameraX.max) || 0);
   render();

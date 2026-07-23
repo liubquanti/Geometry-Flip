@@ -84,6 +84,7 @@
         <div class="actions-title">Actions</div>
         <div class="actions-buttons">
           <button id="loadBtn" type="button">LOAD</button>
+          <button id="musicBtn" type="button">MUSIC</button>
           <button id="saveBtn" type="button">EXPORT</button>
           <button id="exitBtn" type="button">EXIT</button>
           <input id="fileInput" type="file" accept=".gdlvl,.txt" hidden />
@@ -95,6 +96,69 @@
       <canvas id="editorCanvas" aria-label="Level editor canvas"></canvas>
       <span id="saveIcon" class="save-icon" aria-hidden="true" hidden></span>
     </main>
+
+    <div id="musicEditor" class="music-editor" hidden>
+      <div class="music-editor-inner">
+        <div class="music-editor-title">LEVEL MUSIC</div>
+        <div class="music-grid">
+          <label class="field narrow">
+            <span>BPM</span>
+            <input id="musicBpm" type="number" min="20" max="400" step="1" value="120" />
+          </label>
+          <label class="field narrow">
+            <span>Duration</span>
+            <select id="musicDuration">
+              <option value="1">1 (whole)</option>
+              <option value="2">2 (half)</option>
+              <option value="4">4 (quarter)</option>
+              <option value="8" selected>8 (eighth)</option>
+              <option value="16">16 (sixteenth)</option>
+              <option value="32">32</option>
+            </select>
+          </label>
+          <label class="field narrow">
+            <span>Octave</span>
+            <input id="musicOctave" type="number" min="0" max="8" step="1" value="5" />
+          </label>
+        </div>
+        <label class="field music-notes-field">
+          <span>Notes (comma separated, e.g. "E6, P, 4A, F#5, Bb4")</span>
+          <textarea id="musicNotes" rows="6" spellcheck="false" placeholder="E6, P, E, B, 4P, E, A, G, A, ..."></textarea>
+        </label>
+        <div class="music-hint">
+          Token = [duration]note[#|b][octave][dots], or [duration]P[dots] for a
+          rest. Each trailing "." dot multiplies the note's length by 1.5
+          (compounding). Missing duration/octave use the BPM/Duration/Octave
+          fields above. Example: "4C#6." = dotted quarter-length C-sharp in
+          octave 6.
+        </div>
+        <div class="music-controls">
+          <button id="musicImportMidiBtn" type="button">IMPORT MIDI</button>
+          <button id="musicPlayBtn" type="button">PLAY</button>
+          <button id="musicStopBtn" type="button">STOP</button>
+          <button id="musicCloseBtn" type="button">CLOSE</button>
+          <input id="midiFileInput" type="file" accept=".mid,.midi" hidden />
+        </div>
+        <div id="midiImportPanel" class="midi-import-panel" hidden>
+          <div class="midi-import-title">MIDI IMPORT — <span id="midiImportFileName"></span></div>
+          <div class="music-grid midi-import-grid">
+            <label class="field">
+              <span>Track</span>
+              <select id="midiTrackSelect"></select>
+            </label>
+            <label class="field">
+              <span>Channel</span>
+              <select id="midiChannelSelect"></select>
+            </label>
+          </div>
+          <label class="midi-checkbox-row">
+            <input id="midiSkipDrums" type="checkbox" checked />
+            <span>Skip drum channel (MIDI channel 10)</span>
+          </label>
+          <div id="midiImportStats" class="midi-import-stats"></div>
+        </div>
+      </div>
+    </div>
 
     <footer class="panel bottom-panel">
       <div class="palette-head">

@@ -20,5 +20,6 @@ App(
         "lib/data/levels.c",
         "lib/data/skins.c",
         "lib/data/objects.c",
+        "lib/data/music.c",
     ],
 )
