@@ -1143,7 +1143,21 @@ static void music_update(GeoApp* app) {
         return;
     }
 
-    app->music_next_tick = now + (uint32_t)ms;
+    /* Schedule the *next* note relative to this note's ideal start
+       (music_next_tick), not to `now` — the main loop only polls once
+       per frame, so `now` is always a little late (by however long the
+       frame took) whenever a note boundary is noticed. Rebasing off
+       `now` bakes that lateness into every single note transition,
+       and it compounds over the whole track: a few late milliseconds
+       per note times hundreds of notes adds up to seconds of drift,
+       audibly dragging the tempo (this is why it was equally slower for
+       both the level tune and the menu tune — same shared player).
+       Only resync to `now` if we've fallen behind by more than this
+       note's own length (e.g. just came out of the level intro delay,
+       or a long pause) — otherwise a stall would fire every missed note
+       in an instant burst trying to catch up. */
+    app->music_next_tick += (uint32_t)ms;
+    if(app->music_next_tick < now) app->music_next_tick = now;
     app->music_cur_freq  = freq;
     app->music_cur_rest  = rest;
 

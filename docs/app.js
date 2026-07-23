@@ -1366,8 +1366,33 @@ function parseMidiFile(buf) {
    interrupted note that's still held (if any). Matches the mono-voice
    behavior of a real synthesizer far better than picking the single
    highest pitch on overlap would. Assumes `events` is already in
-   chronological tick order, which a raw MIDI track stream always is. */
+   chronological tick order, which a raw MIDI track stream always is.
+
+   Exception: a genuine chord — several note-ons landing on the *exact
+   same* tick — isn't a "new note interrupting the old one", it's several
+   voices starting together. Feeding those straight into the interrupt
+   logic above picks whichever one the source file happens to list last,
+   which is arbitrary (export-order dependent) and often lands on an
+   inner/bass voice instead of the melody. So simultaneous onsets are
+   collapsed first, keeping only the highest pitch — the usual
+   "melody is the top voice" convention — before the interrupt logic
+   ever sees them. */
 function reduceMonophonic(events) {
+  const onsetsByTick = new Map();
+  for (const e of events) {
+    if (e.type !== 'on') continue;
+    if (!onsetsByTick.has(e.tick)) onsetsByTick.set(e.tick, []);
+    onsetsByTick.get(e.tick).push(e);
+  }
+  const dropped = new Set();
+  for (const group of onsetsByTick.values()) {
+    if (group.length < 2) continue;
+    let top = group[0];
+    for (const e of group) if (e.note > top.note) top = e;
+    for (const e of group) if (e !== top) dropped.add(e);
+  }
+  if (dropped.size) events = events.filter((e) => !dropped.has(e));
+
   let current = null;
   const stack = [];
   const segments = [];
