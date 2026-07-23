@@ -57,7 +57,7 @@
 #define DEATH_PARTICLES 24
 #define CAM_Y_TRIGGER_ROWS 4   /* camera starts rising once player climbs above this many blocks */
 #define CAM_Y_SMOOTH    0.15f  /* lerp factor per frame for smooth vertical follow */
-#define MUSIC_NOTES_MAX 900    /* max length of the comma-separated note-list string */
+#define MUSIC_NOTES_MAX 10000    /* max length of the comma-separated note-list string */
 #define MUSIC_TOKEN_MAX 24     /* max length of a single note token, e.g. "4F#6" */
 #define MUSIC_VOLUME    1.0f
 #define INTRO_HIDE_FRAMES 44  /* ~1s at 23ms per frame */

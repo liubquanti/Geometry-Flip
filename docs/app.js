@@ -2,7 +2,7 @@ const ORANGE = '#ff8200';
 const BLACK = '#000000';
 const GRID = 8;
 const MAX_OBJECTS = 512;
-const MUSIC_NOTES_MAX = 900; // must match MUSIC_NOTES_MAX in lib/geoflip.c
+const MUSIC_NOTES_MAX = 10000; // must match MUSIC_NOTES_MAX in lib/geoflip.c
 const AUTO_LENGTH_PADDING = 10;
 const PANELS = {
   top: 136,
