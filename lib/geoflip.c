@@ -19,6 +19,7 @@
 
 #include <furi.h>
 #include <furi_hal_speaker.h>
+#include <furi_hal_rtc.h>
 #include <gui/gui.h>
 #include <input/input.h>
 #include <storage/storage.h>
@@ -1120,6 +1121,14 @@ static bool music_parse_token(const char* tok, int default_dur, int default_octa
     return true;
 }
 
+/* The Flipper's system-wide "Stealth Mode" (mute) toggle — held Down from
+   the desktop, shown as a muted-speaker icon in the status bar. It only
+   silences the OS's own notification sounds; anything using the speaker
+   directly (as our music player does) has to check it itself. */
+static bool music_muted(void) {
+    return furi_hal_rtc_is_flag_set(FuriHalRtcFlagStealthMode);
+}
+
 /* Advance the tune; only actually does work once the current note's
    duration has elapsed. Timed against the real-time tick counter rather
    than a frame count — the main loop's frame period is "furi_delay_ms(23)
@@ -1161,6 +1170,10 @@ static void music_update(GeoApp* app) {
     app->music_cur_freq  = freq;
     app->music_cur_rest  = rest;
 
+    if(music_muted()) {
+        if(app->music_acquired) furi_hal_speaker_stop();
+        return;
+    }
     if(!app->music_acquired) {
         if(furi_hal_speaker_acquire(1000)) app->music_acquired = true;
     }
@@ -1183,6 +1196,7 @@ static void music_pause(GeoApp* app) {
 static void music_resume(GeoApp* app) {
     if(!app->music_active) return;
     app->music_next_tick += furi_get_tick() - app->music_pause_started;
+    if(music_muted()) return;
     if(!app->music_acquired) {
         if(furi_hal_speaker_acquire(1000)) app->music_acquired = true;
     }
