@@ -152,7 +152,7 @@ int32_t geoflip(void* p) {
 
             switch(app->state) {
             case GAMESTATE_SPLASH:
-                /* no input during splash */
+                if(pressed && ev.key == InputKeyOk) app->state = GAMESTATE_MAINMENU;
                 break;
 
             case GAMESTATE_MENU:

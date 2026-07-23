@@ -145,9 +145,19 @@ static void draw_background(Canvas* canvas, char style, int cam_x) {
 }
 
 /* Bottom-center overlay shown for VOLUME_OVERLAY_FRAMES after Up/Down
-   changes app->sound_volume from the main menu or pause menu. */
+   changes app->sound_volume from the main menu or pause menu. Sized to
+   its content (rather than a fixed width the content is centered inside)
+   so the three gaps — margin-to-icon, icon-to-bar, last-segment-to-margin
+   — come out equal by construction, with every bar segment the same
+   width. */
 static void draw_volume_overlay(Canvas* canvas, const GeoApp* app) {
-    const int card_w = 74;
+    const int margin  = 6;
+    const int icon_w  = 8;
+    const int seg_w    = 3;
+    const int seg_gap  = 1;
+    const int bar_w = SOUND_VOLUME_MAX * seg_w + (SOUND_VOLUME_MAX - 1) * seg_gap;
+
+    const int card_w = margin * 3 + icon_w + bar_w - ( margin / 2);
     const int card_h = 18;
     const int card_x = (SCREEN_W - card_w) / 2;
     const int card_y = SCREEN_H - card_h - 3;
@@ -166,7 +176,7 @@ static void draw_volume_overlay(Canvas* canvas, const GeoApp* app) {
         /* Stealth Mode is on — Up/Down can't change anything, so show
            three muted-speaker icons instead of the usual icon+bar to make
            that plain, rather than a bar that looks adjustable but isn't. */
-        const int icon_w = 8, gap = 6;
+        const int gap = margin;
         const int total_w = icon_w * 3 + gap * 2;
         int ix = card_x + (card_w - total_w) / 2;
         const int iy = card_y + 5;
@@ -177,18 +187,16 @@ static void draw_volume_overlay(Canvas* canvas, const GeoApp* app) {
         return;
     }
 
-    canvas_draw_icon(canvas, card_x + 6, card_y + 5, app->sound_volume > 0 ? &I_unmuted : &I_muted);
+    canvas_draw_icon(canvas, card_x + margin, card_y + 5, app->sound_volume > 0 ? &I_unmuted : &I_muted);
 
-    const int bar_x    = card_x + 20;
-    const int bar_y    = card_y + 6;
-    const int bar_w    = card_w - 26;
-    const int bar_h    = 6;
-    const int seg_gap  = 1;
-    const int seg_w    = (bar_w - (SOUND_VOLUME_MAX - 1) * seg_gap) / SOUND_VOLUME_MAX;
+    const int bar_x = card_x + ( margin / 2) + icon_w + margin;
+    const int bar_y = card_y + 6;
+    const int bar_h = 6;
+    int sx = bar_x;
     for(int i = 0; i < SOUND_VOLUME_MAX; i++) {
-        int sx = bar_x + i * (seg_w + seg_gap);
         if(i < app->sound_volume) canvas_draw_box(canvas, sx, bar_y, seg_w, bar_h);
         else canvas_draw_frame(canvas, sx, bar_y, seg_w, bar_h);
+        sx += seg_w + seg_gap;
     }
 }
 
@@ -419,7 +427,7 @@ void render_callback(Canvas* canvas, void* ctx) {
 
         /* Overlay */
         if(app->state == GAMESTATE_PAUSE) {
-            const int card_x = 30;
+            const int card_x = 31;
             const int card_y = 24;
             const int card_w = 66;
             const int card_h = 16;
