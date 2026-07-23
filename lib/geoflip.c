@@ -4,7 +4,8 @@
  * Controls:
  *   OK    — Jump (hold = auto-jump on every landing)
  *   Back  — Pause / Exit
- *   Up/Dn — Navigate menu
+ *   Up/Dn — Navigate menu; in the main menu or the pause menu, adjusts
+ *           sound volume instead (shows a bottom-center overlay)
  *
  * Optimizations vs previous version:
  *   - Objects sorted by GX on load → O(log n) binary search each frame
@@ -45,6 +46,32 @@ static void input_callback(InputEvent* event, void* ctx) {
     furi_message_queue_put((FuriMessageQueue*)ctx, event, 0);
 }
 
+/* Up/Down volume control — available from the main menu and the pause
+   menu (see GAMESTATE_MAINMENU / GAMESTATE_PAUSE below). Arms the bottom
+   overlay for VOLUME_OVERLAY_FRAMES. In the main menu the menu tune is
+   still ticking every frame, so we just reapply the new volume to
+   whatever note is already sounding. In the pause menu gameplay (and its
+   music) is frozen, so instead we fire a short self-terminating beep —
+   see music_play_volume_beep()'s comment for why reusing music_apply_volume
+   there would leave a note stuck playing forever.
+
+   If the system-wide Stealth Mode toggle is on, sound_volume is left
+   untouched entirely (there's nothing Up/Down can do about it) — the
+   overlay still shows, but render.c draws a dedicated "muted at the
+   system level" state instead of the usual bar. */
+static void adjust_volume(GeoApp* app, int delta) {
+    app->volume_overlay_timer = VOLUME_OVERLAY_FRAMES;
+    if(music_system_muted()) return;
+
+    int v = (int)app->sound_volume + delta;
+    if(v < 0) v = 0;
+    if(v > SOUND_VOLUME_MAX) v = SOUND_VOLUME_MAX;
+    app->sound_volume = (int8_t)v;
+    app->volume_dirty = true;
+    if(app->state == GAMESTATE_PAUSE) music_play_volume_beep(app);
+    else music_apply_volume(app);
+}
+
 /* ─── Entry Point ────────────────────────────────────────────────── */
 
 int32_t geoflip(void* p) {
@@ -58,6 +85,7 @@ int32_t geoflip(void* p) {
     app->official_sel = 0;
     app->selected_skin = 0;
     app->skin_cursor = 0;
+    app->sound_volume = SOUND_VOLUME_DEFAULT; /* overwritten by load_player_profile below if saved */
     app->current_is_official = true;
     app->current_level_idx = 0;
     app->splash_frames = 0;
@@ -154,6 +182,8 @@ int32_t geoflip(void* p) {
                 if(pressed && ev.key == InputKeyRight) {
                     app->state = GAMESTATE_MENU; /* reuse existing custom list */
                 }
+                if(pressed && ev.key == InputKeyUp)   adjust_volume(app, 1);
+                if(pressed && ev.key == InputKeyDown) adjust_volume(app, -1);
                 if(pressed && ev.key == InputKeyBack) running = false;
                 break;
 
@@ -205,6 +235,8 @@ int32_t geoflip(void* p) {
 
             case GAMESTATE_PAUSE:
                 if(pressed && ev.key == InputKeyOk)  app->state = GAMESTATE_PLAYING;
+                if(pressed && ev.key == InputKeyUp)   adjust_volume(app, 1);
+                if(pressed && ev.key == InputKeyDown) adjust_volume(app, -1);
                 if(pressed && ev.key == InputKeyBack) {
                     app->state = app->current_is_official ? GAMESTATE_OFFICIALS : GAMESTATE_MENU;
                 }
@@ -322,9 +354,11 @@ int32_t geoflip(void* p) {
                    message instead of cutting it off. */
                 if(prev_state == GAMESTATE_PAUSE) music_resume(app);
                 music_update(app);
-            } else if(prev_state == GAMESTATE_PLAYING &&
-                      (app->state == GAMESTATE_PAUSE || app->state == GAMESTATE_DEAD)) {
-                music_pause(app); /* stop the tone, keep the speaker for a quick resume */
+            } else if(app->state == GAMESTATE_PAUSE) {
+                if(prev_state == GAMESTATE_PLAYING) music_pause(app); /* stop the tone, keep the speaker for a quick resume */
+                music_tick_volume_beep(app); /* cut off the Up/Down volume feedback blip after VOLUME_BEEP_MS */
+            } else if(prev_state == GAMESTATE_PLAYING && app->state == GAMESTATE_DEAD) {
+                music_pause(app);
             }
         } else if(app->state == GAMESTATE_SPLASH) {
             app->music_is_menu = false; /* not started yet — wait for the main menu */
@@ -334,6 +368,16 @@ int32_t geoflip(void* p) {
                 app->music_is_menu = true;
             }
             music_update(app);
+        }
+
+        /* volume overlay countdown — once it hides, flush any pending
+           volume change to disk rather than writing on every keypress */
+        if(app->volume_overlay_timer > 0) {
+            app->volume_overlay_timer--;
+            if(app->volume_overlay_timer == 0 && app->volume_dirty) {
+                save_player_profile(app);
+                app->volume_dirty = false;
+            }
         }
 
         view_port_update(vp);

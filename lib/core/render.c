@@ -6,6 +6,7 @@
 #include "trig.h"
 #include "collision.h"
 #include "game.h"
+#include "music_player.h"
 #include "../data/skins.h"
 #include "../data/objects.h"
 #include "../data/levels.h"
@@ -140,6 +141,54 @@ static void draw_background(Canvas* canvas, char style, int cam_x) {
             canvas_draw_line(canvas, x, 0, x, GROUND_Y-1);
         for(int y = 0; y < GROUND_Y; y += 16)
             canvas_draw_line(canvas, 0, y, SCREEN_W-1, y);
+    }
+}
+
+/* Bottom-center overlay shown for VOLUME_OVERLAY_FRAMES after Up/Down
+   changes app->sound_volume from the main menu or pause menu. */
+static void draw_volume_overlay(Canvas* canvas, const GeoApp* app) {
+    const int card_w = 74;
+    const int card_h = 18;
+    const int card_x = (SCREEN_W - card_w) / 2;
+    const int card_y = SCREEN_H - card_h - 3;
+
+    canvas_set_color(canvas, ColorBlack);
+    canvas_draw_rbox(canvas, card_x, card_y, card_w, card_h, 3);
+    canvas_set_color(canvas, ColorWhite);
+    canvas_draw_rbox(canvas, card_x + 1, card_y + 1, card_w - 2, card_h - 2, 2);
+    canvas_set_color(canvas, ColorBlack);
+    canvas_draw_rbox(canvas, card_x + 2, card_y + 2, card_w - 4, card_h - 4, 2);
+    canvas_set_color(canvas, ColorWhite);
+    canvas_draw_rbox(canvas, card_x + 3, card_y + 3, card_w - 6, card_h - 6, 1);
+    canvas_set_color(canvas, ColorBlack);
+
+    if(music_system_muted()) {
+        /* Stealth Mode is on — Up/Down can't change anything, so show
+           three muted-speaker icons instead of the usual icon+bar to make
+           that plain, rather than a bar that looks adjustable but isn't. */
+        const int icon_w = 8, gap = 6;
+        const int total_w = icon_w * 3 + gap * 2;
+        int ix = card_x + (card_w - total_w) / 2;
+        const int iy = card_y + 5;
+        for(int i = 0; i < 3; i++) {
+            canvas_draw_icon(canvas, ix, iy, &I_muted);
+            ix += icon_w + gap;
+        }
+        return;
+    }
+
+    canvas_draw_icon(canvas, card_x + 6, card_y + 5, app->sound_volume > 0 ? &I_unmuted : &I_muted);
+
+    const int bar_x    = card_x + 20;
+    const int bar_y    = card_y + 6;
+    const int bar_w    = card_w - 26;
+    const int bar_h    = 6;
+    const int seg_gap  = 1;
+    const int seg_w    = (bar_w - (SOUND_VOLUME_MAX - 1) * seg_gap) / SOUND_VOLUME_MAX;
+    for(int i = 0; i < SOUND_VOLUME_MAX; i++) {
+        int sx = bar_x + i * (seg_w + seg_gap);
+        if(i < app->sound_volume) canvas_draw_box(canvas, sx, bar_y, seg_w, bar_h);
+        else canvas_draw_frame(canvas, sx, bar_y, seg_w, bar_h);
     }
 }
 
@@ -424,6 +473,9 @@ void render_callback(Canvas* canvas, void* ctx) {
                 AlignCenter,
                 buf);
         }
+        if(app->state == GAMESTATE_PAUSE && app->volume_overlay_timer > 0) {
+            draw_volume_overlay(canvas, app);
+        }
         return;
     }
 
@@ -582,6 +634,8 @@ void render_callback(Canvas* canvas, void* ctx) {
         canvas_set_color(canvas, ColorBlack);
         canvas_draw_circle(canvas, hint_x_right, hint_y, hint_side_r);
         canvas_draw_icon(canvas, hint_x_right - 1, hint_y - 3, &I_button_right);
+
+        if(app->volume_overlay_timer > 0) draw_volume_overlay(canvas, app);
         return;
     }
 

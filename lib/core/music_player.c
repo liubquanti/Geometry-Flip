@@ -141,9 +141,25 @@ static bool music_parse_token(const char* tok, int default_dur, int default_octa
 /* The Flipper's system-wide "Stealth Mode" (mute) toggle — held Down from
    the desktop, shown as a muted-speaker icon in the status bar. It only
    silences the OS's own notification sounds; anything using the speaker
-   directly (as our music player does) has to check it itself. */
-static bool music_muted(void) {
+   directly (as our music player does) has to check it itself. Exposed
+   (not static) so the volume-overlay UI can tell this apart from the
+   in-app volume being at 0 — Stealth Mode overrides sound_volume entirely
+   and isn't something Up/Down can change, so the overlay shows a distinct
+   "muted at the system level" state instead of the usual bar. */
+bool music_system_muted(void) {
     return furi_hal_rtc_is_flag_set(FuriHalRtcFlagStealthMode);
+}
+
+/* Also honors the in-app volume slider (Up/Down in the main menu or pause
+   menu) — volume 0 silences the speaker the same way. */
+static bool music_muted(const GeoApp* app) {
+    return app->sound_volume <= 0 || music_system_muted();
+}
+
+/* Speaker level for the current in-app volume setting, scaled against the
+   track's base MUSIC_VOLUME. */
+static float music_volume_level(const GeoApp* app) {
+    return MUSIC_VOLUME * ((float)app->sound_volume / (float)SOUND_VOLUME_MAX);
 }
 
 /* Timed against the real-time tick counter rather than a frame count —
@@ -202,7 +218,7 @@ void music_update(GeoApp* app) {
     app->music_cur_freq  = freq;
     app->music_cur_rest  = rest;
 
-    if(music_muted()) {
+    if(music_muted(app)) {
         if(app->music_acquired) furi_hal_speaker_stop();
         return;
     }
@@ -211,7 +227,7 @@ void music_update(GeoApp* app) {
     }
     if(app->music_acquired) {
         if(rest) furi_hal_speaker_stop();
-        else furi_hal_speaker_start(freq, MUSIC_VOLUME);
+        else furi_hal_speaker_start(freq, music_volume_level(app));
     }
 }
 
@@ -220,15 +236,60 @@ void music_pause(GeoApp* app) {
     app->music_pause_started = furi_get_tick();
 }
 
+/* Re-applies the current volume to whatever note is sounding right now, so
+   an Up/Down volume adjustment in the main menu is heard immediately
+   instead of waiting for the next note boundary. Only safe to call while
+   music_update() is still ticking every frame (i.e. the menu tune) — the
+   note gets naturally superseded at the next note boundary. Do NOT use
+   this while GAMESTATE_PAUSE: music_update() isn't running there, so the
+   note it restarts would never get stopped again, playing forever; use
+   music_play_volume_beep() for that case instead. */
+void music_apply_volume(GeoApp* app) {
+    if(!app->music_acquired) return;
+    if(music_muted(app)) {
+        furi_hal_speaker_stop();
+        return;
+    }
+    if(!app->music_cur_rest) furi_hal_speaker_start(app->music_cur_freq, music_volume_level(app));
+}
+
+/* Short, self-terminating feedback blip for Up/Down volume adjustments
+   made from the pause menu, where music_update() isn't ticking (gameplay
+   is frozen) so nothing would ever call furi_hal_speaker_stop() on a note
+   restarted there — call music_tick_volume_beep() every frame afterward
+   to cut it off after VOLUME_BEEP_MS. */
+void music_play_volume_beep(GeoApp* app) {
+    if(music_muted(app)) return;
+    if(!app->music_acquired) {
+        if(!furi_hal_speaker_acquire(1000)) return;
+        app->music_acquired = true;
+    }
+    float freq = app->music_cur_freq > 0.0f ? app->music_cur_freq : 659.26f; /* E5 fallback */
+    furi_hal_speaker_start(freq, music_volume_level(app));
+    app->volume_beep_until_tick = furi_get_tick() + VOLUME_BEEP_MS;
+}
+
+/* Cuts off a pending music_play_volume_beep() once its deadline passes.
+   Caller (main loop) is expected to only invoke this while GAMESTATE_PAUSE
+   is active — see music_play_volume_beep's comment for why. */
+void music_tick_volume_beep(GeoApp* app) {
+    if(app->volume_beep_until_tick == 0) return;
+    if(furi_get_tick() >= app->volume_beep_until_tick) {
+        if(app->music_acquired) furi_hal_speaker_stop();
+        app->volume_beep_until_tick = 0;
+    }
+}
+
 void music_resume(GeoApp* app) {
+    app->volume_beep_until_tick = 0; /* any pending pause-menu beep is moot now */
     if(!app->music_active) return;
     app->music_next_tick += furi_get_tick() - app->music_pause_started;
-    if(music_muted()) return;
+    if(music_muted(app)) return;
     if(!app->music_acquired) {
         if(furi_hal_speaker_acquire(1000)) app->music_acquired = true;
     }
     if(app->music_acquired && !app->music_cur_rest) {
-        furi_hal_speaker_start(app->music_cur_freq, MUSIC_VOLUME);
+        furi_hal_speaker_start(app->music_cur_freq, music_volume_level(app));
     }
 }
 

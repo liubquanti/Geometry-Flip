@@ -14,3 +14,5 @@ extern const Icon I_easy;
 extern const Icon I_hard;
 extern const Icon I_insane;
 extern const Icon I_demon;
+extern const Icon I_muted;
+extern const Icon I_unmuted;

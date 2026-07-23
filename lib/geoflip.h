@@ -36,6 +36,10 @@
 #define MUSIC_NOTES_MAX 10000    /* max length of the comma-separated note-list string */
 #define MUSIC_TOKEN_MAX 24     /* max length of a single note token, e.g. "4F#6" */
 #define MUSIC_VOLUME    1.0f
+#define SOUND_VOLUME_MAX      10 /* sound_volume steps, 0 = muted */
+#define SOUND_VOLUME_DEFAULT  10
+#define VOLUME_OVERLAY_FRAMES 60 /* ~1.4s at 23ms per frame */
+#define VOLUME_BEEP_MS      90  /* pause-menu volume feedback blip duration */
 #define INTRO_HIDE_FRAMES 44  /* ~1s at 23ms per frame */
 #define INTRO_ENTRY_FRAMES 20 /* player slides in before camera starts */
 #define MENU_CUBE_PERIOD_FRAMES 174 /* ~4s at 23ms per frame */
@@ -186,6 +190,13 @@ typedef struct {
     int8_t  selected_skin; /* index of chosen skin */
     int8_t  skin_cursor;   /* UI cursor while selecting */
     int8_t* official_prog; /* pointer to saved progress percent per official level (0-100) */
+
+    /* sound volume — adjustable with Up/Down from the main menu or the
+       pause menu; 0..SOUND_VOLUME_MAX, persisted in the player profile */
+    int8_t   sound_volume;
+    uint16_t volume_overlay_timer; /* frames left to show the volume overlay, 0 = hidden */
+    bool     volume_dirty;         /* sound_volume changed since last save_player_profile */
+    uint32_t volume_beep_until_tick; /* pause-menu feedback blip: furi_get_tick() deadline to stop it, 0 = none pending */
 
     bool    current_is_official;
     int8_t  current_level_idx;

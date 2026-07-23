@@ -28,8 +28,8 @@ void save_player_profile(GeoApp* app) {
             return;
         }
     }
-    char buf[16];
-    int len = snprintf(buf, sizeof(buf), "%d\n", (int)app->selected_skin);
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "%d\n%d\n", (int)app->selected_skin, (int)app->sound_volume);
     storage_file_write(file, buf, len);
     storage_file_close(file);
     storage_file_free(file);
@@ -42,6 +42,7 @@ void load_player_profile(GeoApp* app) {
     Storage* storage = furi_record_open(RECORD_STORAGE);
     storage_simply_mkdir(storage, dir);
     File* file = storage_file_alloc(storage);
+    app->sound_volume = SOUND_VOLUME_DEFAULT;
     if(!storage_file_open(file, path, FSAM_READ, FSOM_OPEN_EXISTING)) {
         /* create default file */
         storage_file_free(file);
@@ -57,6 +58,13 @@ void load_player_profile(GeoApp* app) {
     if(read > 0) {
         int v = atoi(buf);
         if(v >= 0 && v < SKIN_COUNT) app->selected_skin = (int8_t)v;
+        char* nl = strchr(buf, '\n');
+        /* older profiles predate the volume line — leave the default in
+           that case instead of parsing "" as 0 (silently muting them) */
+        if(nl && nl[1] >= '0' && nl[1] <= '9') {
+            int vol = atoi(nl + 1);
+            if(vol >= 0 && vol <= SOUND_VOLUME_MAX) app->sound_volume = (int8_t)vol;
+        }
     }
 }
 
