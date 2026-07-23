@@ -17,6 +17,13 @@ App(
     fap_author="liubquanti",
     sources=[
         "lib/geoflip.c",
+        "lib/core/trig.c",
+        "lib/core/collision.c",
+        "lib/core/level_parser.c",
+        "lib/core/music_player.c",
+        "lib/core/game.c",
+        "lib/core/render.c",
+        "lib/core/profile.c",
         "lib/data/levels.c",
         "lib/data/skins.c",
         "lib/data/objects.c",
