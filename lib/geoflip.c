@@ -316,12 +316,14 @@ int32_t geoflip(void* p) {
                           app->state == GAMESTATE_DEAD || app->state == GAMESTATE_WIN);
         if(in_level) {
             app->music_is_menu = false;
-            if(app->state == GAMESTATE_PLAYING && !app->intro_active) {
+            if((app->state == GAMESTATE_PLAYING && !app->intro_active) ||
+               app->state == GAMESTATE_WIN) {
+                /* WIN keeps the tune going right through the "LEVEL CLEAR!"
+                   message instead of cutting it off. */
                 if(prev_state == GAMESTATE_PAUSE) music_resume(app);
                 music_update(app);
             } else if(prev_state == GAMESTATE_PLAYING &&
-                      (app->state == GAMESTATE_PAUSE || app->state == GAMESTATE_DEAD ||
-                       app->state == GAMESTATE_WIN)) {
+                      (app->state == GAMESTATE_PAUSE || app->state == GAMESTATE_DEAD)) {
                 music_pause(app); /* stop the tone, keep the speaker for a quick resume */
             }
         } else if(app->state == GAMESTATE_SPLASH) {

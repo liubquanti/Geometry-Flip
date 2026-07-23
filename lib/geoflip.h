@@ -136,6 +136,7 @@ typedef struct {
     int16_t  music_src_duration;
     int16_t  music_src_octave;
     bool     music_active;   /* active track has a note list to play */
+    bool     music_loop;     /* true: repeat from the start at the end of the token list (menu); false: play once then stop (level) */
     bool     music_acquired; /* we currently own the speaker */
     uint16_t music_cursor;   /* byte offset of the next token in music_notes_src */
     uint32_t music_next_tick; /* furi_get_tick() value (ms) at which to advance to the next note */

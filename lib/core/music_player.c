@@ -41,12 +41,20 @@ static const float NOTE_FREQ_HZ[128] = {
     8372.02f, 8869.84f, 9397.27f, 9956.06f, 10548.08f, 11175.30f, 11839.82f, 12543.85f,
 };
 
-/* Pull the next comma-separated token out of `notes`, looping back to the
-   start once the end of the list is reached (so tunes repeat forever). */
-static bool music_next_token(const char* notes, uint16_t* cursor, char* out, int out_cap) {
+/* Pull the next comma-separated token out of `notes`. When `loop` is true,
+   wraps back to the start once the end of the list is reached (menu tune,
+   repeats forever); when false, signals `*out_end` instead of wrapping so
+   the caller can stop playback after the last note (level tune, plays
+   once). */
+static bool music_next_token(const char* notes, uint16_t* cursor, char* out, int out_cap,
+                              bool loop, bool* out_end) {
+    *out_end = false;
     int len = (int)strlen(notes);
-    if(len == 0) return false;
-    if(*cursor >= (uint16_t)len) *cursor = 0;
+    if(len == 0) { *out_end = true; return false; }
+    if(*cursor >= (uint16_t)len) {
+        if(!loop) { *out_end = true; return false; }
+        *cursor = 0;
+    }
 
     int start = (int)*cursor;
     int i = start;
@@ -148,8 +156,16 @@ void music_update(GeoApp* app) {
     if(now < app->music_next_tick) return;
 
     char tok[MUSIC_TOKEN_MAX];
-    if(!music_next_token(app->music_notes_src, &app->music_cursor, tok, sizeof(tok))) {
-        app->music_next_tick = now + 1; /* skip a bad/empty token, retry shortly */
+    bool end = false;
+    if(!music_next_token(app->music_notes_src, &app->music_cursor, tok, sizeof(tok),
+                          app->music_loop, &end)) {
+        if(end) {
+            /* reached the end of a non-looping (level) track — stop for good */
+            app->music_active = false;
+            if(app->music_acquired) furi_hal_speaker_stop();
+            return;
+        }
+        app->music_next_tick = now + 1; /* skip a bad token, retry shortly */
         return;
     }
 
@@ -172,9 +188,17 @@ void music_update(GeoApp* app) {
        Only resync to `now` if we've fallen behind by more than this
        note's own length (e.g. just came out of the level intro delay,
        or a long pause) — otherwise a stall would fire every missed note
-       in an instant burst trying to catch up. */
-    app->music_next_tick += (uint32_t)ms;
-    if(app->music_next_tick < now) app->music_next_tick = now;
+       in an instant burst trying to catch up. When that resync happens,
+       count this note's full duration from `now` (rather than dropping
+       it to `now` outright) — otherwise the note we just started playing
+       gets an ~0ms deadline and is cut off on the very next frame, which
+       is exactly what made the first note of a level's tune sound
+       clipped (game_reset arms music_next_tick before the level-intro
+       slide-in delay, so the very first note is always the one that
+       falls behind). */
+    uint32_t next_tick = app->music_next_tick + (uint32_t)ms;
+    if(next_tick < now) next_tick = now + (uint32_t)ms;
+    app->music_next_tick = next_tick;
     app->music_cur_freq  = freq;
     app->music_cur_rest  = rest;
 
@@ -241,6 +265,7 @@ void music_use_level_track(GeoApp* app) {
     app->music_src_duration = app->level.music_duration;
     app->music_src_octave   = app->level.music_octave;
     app->music_active       = (app->music_src_bpm > 0 && app->music_notes_src[0] != '\0');
+    app->music_loop         = false; /* level tune plays once, then stays silent */
     app->music_cursor       = 0;
     app->music_next_tick    = furi_get_tick();
     app->music_cur_freq     = 0.0f;
@@ -263,6 +288,7 @@ void music_use_menu_track(GeoApp* app) {
     app->music_src_duration = duration;
     app->music_src_octave   = octave;
     app->music_active       = (bpm > 0 && notes[0] != '\0');
+    app->music_loop         = true; /* menu tune repeats continuously */
     app->music_cursor       = 0;
     app->music_next_tick    = furi_get_tick();
     app->music_cur_freq     = 0.0f;
