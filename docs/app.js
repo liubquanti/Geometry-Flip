@@ -4,6 +4,8 @@ const GRID = 8;
 const MAX_OBJECTS = 512;
 const MUSIC_NOTES_MAX = 10000; // must match MUSIC_NOTES_MAX in lib/geoflip.c
 const AUTO_LENGTH_PADDING = 10;
+const MAX_BUILD_GY = 50; // top-most buildable row — grid/placement stop above this
+function isBuildableGy(gy) { return gy >= 0 && gy <= MAX_BUILD_GY; }
 const PANELS = {
   top: 136,
   bottom: 96,
@@ -50,6 +52,8 @@ const el = {
   iconCode: document.getElementById('iconCode'),
   iconClose: document.getElementById('iconClose'),
   musicBtn: document.getElementById('musicBtn'),
+  notesToggleBtn: document.getElementById('notesToggleBtn'),
+  playToolbarBtn: document.getElementById('playToolbarBtn'),
   musicEditor: document.getElementById('musicEditor'),
   musicBpm: document.getElementById('musicBpm'),
   musicDuration: document.getElementById('musicDuration'),
@@ -99,6 +103,8 @@ const state = {
   isConnected: false,
   hasFlipperFile: false,
   lastLimitNotice: 0,
+  showNotes: false,
+  playback: { active: false, audioCtx: null, startAudioTime: 0 },
 };
 
 function normalizeRotation(raw) {
@@ -132,9 +138,14 @@ function applyAutoLength(updateCamera = true) {
   if (el.levelLength) {
     el.levelLength.value = String(state.level.length);
   }
+  // Keep the slider's own range following the length change immediately,
+  // even when we don't want to move the camera itself (e.g. mid-placement)
+  // — otherwise a block that extends the level stays unreachable by
+  // dragging the slider until the level is reloaded and this runs with
+  // updateCamera=true again.
+  syncCameraXSliderMax();
   if (updateCamera) {
-    el.cameraX.max = String(Math.max(0, state.level.length));
-    state.cameraX = clamp(state.cameraX, 0, Number(el.cameraX.max));
+    state.cameraX = clamp(state.cameraX, 0, maxCameraX());
     el.cameraX.value = String(state.cameraX);
   }
 }
@@ -170,7 +181,12 @@ function resizeCanvas() {
   const dpr = window.devicePixelRatio || 1;
   el.canvas.width = Math.max(1, Math.floor(rect.width * dpr));
   el.canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+  /* Resizing canvas.width/height resets the whole 2D context state
+     (transform, imageSmoothingEnabled, ...) back to defaults, so both
+     need to be re-applied every time this runs, not just once at startup —
+     otherwise smoothing silently turns back on and blurs the sprites. */
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = false;
   render();
 }
 
@@ -269,6 +285,40 @@ function hVisible() {
   return el.canvas.clientHeight;
 }
 
+/* Vertical pan range for state.cameraY. The upper bound has to scale with
+   zoom: at high zoom each grid row eats far more screen pixels, so a
+   fixed pixel cap (as this used to be) falls well short of the pixels
+   needed to actually scroll row MAX_BUILD_GY into view — the higher the
+   zoom, the lower the row you'd get stuck at. Deriving it from cell()
+   keeps the top of the buildable band reachable at any zoom level, with
+   a couple of rows of headroom above it. */
+function cameraYBounds() {
+  const s = cell();
+  const max = Math.max(0, (MAX_BUILD_GY + 3) * s - hVisible());
+  return { min: -80, max };
+}
+
+/* Horizontal pan range for state.cameraX. Same class of bug as
+   cameraYBounds() above: gridToScreenX()/the note overlay treat cameraX
+   as already zoom-scaled screen pixels (gx * cell() - cameraX, where
+   cell() = GRID * zoom), but the level-end bound used to be the raw,
+   un-zoomed level.length — correct by coincidence only at zoom 1. At
+   higher zoom that raw bound is reached long before the level's actual
+   end is on screen; at lower zoom it lets the camera drift past the end
+   into empty space. Scaling it by state.zoom keeps "all the way right"
+   landing exactly on the level's end at any zoom level. */
+function maxCameraX() {
+  return Math.max(0, state.level.length) * (state.zoom || 1);
+}
+
+/* Keeps the <input type="range"> slider's own min/max in sync with
+   maxCameraX() — needed because the slider clamps drag input against its
+   DOM attribute before any JS handler runs, so a stale attribute would
+   cap dragging even though the rest of the code now allows further. */
+function syncCameraXSliderMax() {
+  el.cameraX.max = String(maxCameraX());
+}
+
 function addOrReplaceObject(type, gx, gy) {
   if (type === 'ERASE') {
     const existing = state.level.objects.some((obj) => obj.gx === gx && obj.gy === gy);
@@ -305,7 +355,7 @@ function addOrReplaceObject(type, gx, gy) {
 
 function placeFromPointer(ev) {
   const { gx, gy } = screenToGrid(ev.clientX, ev.clientY);
-  if (gx < 0 || gy < 0) return;
+  if (gx < 0 || !isBuildableGy(gy)) return;
   addOrReplaceObject(state.tool, gx, gy);
   updateSelectionInfo(gx, gy);
 }
@@ -335,20 +385,28 @@ function drawGrid(width, height) {
   ctx.fillStyle = BLACK;
   ctx.fillRect(0, 0, width, height);
 
+  // Only draw the grid within the buildable band (ground up to
+  // MAX_BUILD_GY) — matches what placeFromPointer actually allows.
+  const clipTop = clamp(gridToScreenY(MAX_BUILD_GY), 0, height);
+  const clipBottom = clamp(gridToScreenY(0) + s, 0, height);
+  if (clipBottom <= clipTop) return;
+
   ctx.strokeStyle = ORANGE;
   ctx.lineWidth = 1;
   ctx.beginPath();
 
   const startX = -((state.cameraX % s) + s) % s;
   for (let x = startX; x < width; x += s) {
-    ctx.moveTo(Math.floor(x) + 0.5, 0);
-    ctx.lineTo(Math.floor(x) + 0.5, height);
+    ctx.moveTo(Math.floor(x) + 0.5, clipTop);
+    ctx.lineTo(Math.floor(x) + 0.5, clipBottom);
   }
 
   const startY = ((height + state.cameraY) % s + s) % s;
   for (let y = startY; y < height; y += s) {
-    ctx.moveTo(0, Math.floor(y) + 0.5);
-    ctx.lineTo(width, Math.floor(y) + 0.5);
+    const yy = Math.floor(y) + 0.5;
+    if (yy < clipTop || yy > clipBottom) continue;
+    ctx.moveTo(0, yy);
+    ctx.lineTo(width, yy);
   }
 
   ctx.stroke();
@@ -366,118 +424,77 @@ function drawRoundedRect(x, y, w, h, radius, fill = true) {
   else ctx.stroke();
 }
 
-function drawBlock(x, y, w, h) {
-  ctx.fillStyle = ORANGE;
-  ctx.fillRect(x, y, w, h);
-}
+/* ─── Object sprites ────────────────────────────────────────────────────
+   Pixel-exact copies of the in-game 8x8 bitmaps (lib/data/objects.c), so
+   objects in the editor look exactly like they will on-device instead of
+   the old vector-shape approximations. */
+const SPRITE_BITMAPS = {
+  BLOCK:      [0xFF, 0x81, 0xBF, 0xBF, 0xBF, 0xBF, 0xBF, 0xFF],
+  SPIKE:      [0x18, 0x10, 0x2C, 0x2C, 0x5E, 0x5E, 0xBF, 0xFF],
+  MINI_SPIKE: [0x00, 0x00, 0x00, 0x00, 0x18, 0x24, 0x5E, 0xFF],
+  MINI_BLOCK: [0x00, 0x00, 0x00, 0x00, 0xFF, 0x81, 0xBF, 0xFF],
+  JUMPER:     [0x00, 0x00, 0x00, 0x00, 0x00, 0x7E, 0x81, 0xFF],
+  SPHERE:     [0x18, 0x66, 0x42, 0x99, 0x99, 0x42, 0x66, 0x18],
+};
+const ROTATABLE_TYPES = new Set(['BLOCK', 'SPIKE', 'MINI_SPIKE', 'MINI_BLOCK']);
 
-function drawSpike(x, y, w, h) {
-  ctx.fillStyle = ORANGE;
-  ctx.beginPath();
-  ctx.moveTo(x, y + h);
-  ctx.lineTo(x + w / 2, y);
-  ctx.lineTo(x + w, y + h);
-  ctx.closePath();
-  ctx.fill();
-}
-
-function drawSpikeRotated(x, y, w, h, rot) {
-  const r = normalizeRotation(rot);
-  if (r === 0) {
-    drawSpike(x, y, w, h);
-    return;
+/* Mirrors draw_sprite_rotated() in lib/core/render.c pixel-for-pixel so
+   rotated sprites match the firmware exactly. `steps` is 0..3 (90° each). */
+function rotateBitmap8(bmp, steps) {
+  if (steps === 0) return bmp;
+  const out = [0, 0, 0, 0, 0, 0, 0, 0];
+  for (let y = 0; y < 8; y++) {
+    const row = bmp[y];
+    for (let x = 0; x < 8; x++) {
+      if (!(row & (1 << (7 - x)))) continue;
+      let dx, dy;
+      if (steps === 1) { dx = 7 - y; dy = x; }
+      else if (steps === 2) { dx = 7 - x; dy = 7 - y; }
+      else { dx = y; dy = 7 - x; }
+      out[dy] |= (1 << (7 - dx));
+    }
   }
-  ctx.fillStyle = ORANGE;
-  ctx.beginPath();
-  if (r === 90) {
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + w, y + h / 2);
-    ctx.lineTo(x, y + h);
-  } else if (r === 180) {
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + w / 2, y + h);
-    ctx.lineTo(x + w, y);
-  } else {
-    ctx.moveTo(x + w, y);
-    ctx.lineTo(x, y + h / 2);
-    ctx.lineTo(x + w, y + h);
+  return out;
+}
+
+function bitmapToCanvas(bmp) {
+  const c = document.createElement('canvas');
+  c.width = 8;
+  c.height = 8;
+  const bctx = c.getContext('2d');
+  bctx.fillStyle = ORANGE;
+  for (let y = 0; y < 8; y++) {
+    const row = bmp[y];
+    for (let x = 0; x < 8; x++) {
+      if (row & (1 << (7 - x))) bctx.fillRect(x, y, 1, 1);
+    }
   }
-  ctx.closePath();
-  ctx.fill();
+  return c;
 }
 
-function drawMiniSpike(x, y, w, h) {
-  const midY = y + h;
-  ctx.fillStyle = ORANGE;
-  ctx.beginPath();
-  ctx.moveTo(x, midY);
-  ctx.lineTo(x + w / 2, y);
-  ctx.lineTo(x + w, midY);
-  ctx.closePath();
-  ctx.fill();
-}
-
-function drawMiniSpikeRotated(x, y, w, h, rot) {
-  const r = normalizeRotation(rot);
-  const halfH = h / 2;
-  const halfW = w / 2;
-  if (r === 0) {
-    drawMiniSpike(x, y + halfH, w, halfH);
-    return;
+const spriteCanvasCache = new Map();
+function getSpriteCanvas(type, rot) {
+  const bmp = SPRITE_BITMAPS[type];
+  if (!bmp) return null;
+  const steps = ROTATABLE_TYPES.has(type) ? (normalizeRotation(rot) / 90) & 3 : 0;
+  const key = `${type}:${steps}`;
+  let c = spriteCanvasCache.get(key);
+  if (!c) {
+    c = bitmapToCanvas(rotateBitmap8(bmp, steps));
+    spriteCanvasCache.set(key, c);
   }
-  ctx.fillStyle = ORANGE;
-  ctx.beginPath();
-  if (r === 180) {
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + w / 2, y + halfH);
-    ctx.lineTo(x + w, y);
-  } else if (r === 90) {
-    const x0 = x;
-    ctx.moveTo(x0, y);
-    ctx.lineTo(x0 + halfW, y + h / 2);
-    ctx.lineTo(x0, y + h);
-  } else {
-    const x0 = x + halfW;
-    ctx.moveTo(x0 + halfW, y);
-    ctx.lineTo(x0, y + h / 2);
-    ctx.lineTo(x0 + halfW, y + h);
-  }
-  ctx.closePath();
-  ctx.fill();
+  return c;
 }
 
-function drawMiniBlock(x, y, w, h) {
-  ctx.fillStyle = ORANGE;
-  ctx.fillRect(x, y, w, h);
-}
-
-function drawMiniBlockRotated(x, y, w, h, rot) {
-  const r = normalizeRotation(rot);
-  const halfW = w / 2;
-  const halfH = h / 2;
-  if (r === 0) {
-    drawMiniBlock(x, y + halfH, w, halfH);
-  } else if (r === 180) {
-    drawMiniBlock(x, y, w, halfH);
-  } else if (r === 90) {
-    drawMiniBlock(x, y, halfW, h);
-  } else {
-    drawMiniBlock(x + halfW, y, halfW, h);
-  }
-}
-
-function drawJumper(x, y, w, h) {
-  ctx.fillStyle = ORANGE;
-  ctx.fillRect(x, y + h - 2, w, 2);
-  // simple filled jumper bar in editor (no black outlines)
-}
-
-function drawSphere(x, y, w, h) {
-  ctx.strokeStyle = ORANGE;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(x + w / 2, y + h / 2, Math.max(2, (w / 2) - 1), 0, Math.PI * 2);
-  ctx.stroke();
+/* Nearest-neighbor scale-up of the cached 8x8 sprite to cell size `s`
+   (ctx.imageSmoothingEnabled is off globally, so this stays crisp). */
+function drawSprite(type, x, y, s, rot = 0, alpha = 1) {
+  const img = getSpriteCanvas(type, rot);
+  if (!img) return;
+  const prevAlpha = ctx.globalAlpha;
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(img, x, y, s, s);
+  ctx.globalAlpha = prevAlpha;
 }
 
 function drawObject(obj) {
@@ -486,29 +503,7 @@ function drawObject(obj) {
   const y = gridToScreenY(obj.gy);
   const visible = x > -s * 2 && x < el.canvas.clientWidth + s * 2;
   if (!visible) return;
-
-  switch (obj.type) {
-    case 'BLOCK':
-      drawBlock(x, y, s, s);
-      break;
-    case 'SPIKE':
-      drawSpikeRotated(x, y, s, s, obj.rot || 0);
-      break;
-    case 'MINI_SPIKE':
-      drawMiniSpikeRotated(x, y, s, s, obj.rot || 0);
-      break;
-    case 'MINI_BLOCK':
-      drawMiniBlockRotated(x, y, s, s, obj.rot || 0);
-      break;
-    case 'JUMPER':
-      drawJumper(x, y, s, s);
-      break;
-    case 'SPHERE':
-      drawSphere(x, y, s, s);
-      break;
-    default:
-      break;
-  }
+  drawSprite(obj.type, x, y, s, obj.rot || 0);
 }
 
 function drawDecoration(dec) {
@@ -529,6 +524,153 @@ function drawDecoration(dec) {
   } else if (dec.type === 'PILLAR') {
     ctx.strokeRect(x, 40, 4, Math.max(4, hVisible() - 40));
   }
+}
+
+/* ─── Note position overlay ────────────────────────────────────────────
+   Shows where each note in the level's music track will actually sound
+   once played, so notes can be lined up with obstacles. Mirrors the
+   firmware's timing: music_update() (lib/core/music_player.c) advances
+   in real time, while the camera advances `level.speed` px every 23ms
+   main-loop tick (lib/geoflip.c's furi_delay_ms(23) call, which is fixed
+   at exactly 23ms), and both start together the instant the level intro
+   finishes — so a note's world-space X is simply its cumulative start
+   time converted to
+   px via that same px-per-ms rate. Purely an authoring approximation
+   (same caveat as the Web Audio preview above). */
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+function freqToNoteName(freq) {
+  if (!freq || freq <= 0) return '';
+  const midi = Math.round(69 + 12 * Math.log2(freq / 440));
+  return `${NOTE_NAMES[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1}`;
+}
+
+let noteOverlayCache = { key: '', marks: [] };
+function computeNoteWorldPositions() {
+  const level = state.level;
+  const key = `${level.musicNotes}|${level.musicBpm}|${level.musicDuration}|${level.musicOctave}|${level.speed}`;
+  if (noteOverlayCache.key === key) return noteOverlayCache.marks;
+
+  const marks = [];
+  if (level.musicNotes && level.musicNotes.trim()) {
+    const bpm = level.musicBpm > 0 ? level.musicBpm : 120;
+    const defDur = level.musicDuration || 8;
+    const defOct = level.musicOctave || 5;
+    const speed = level.speed > 0 ? level.speed : 2;
+    const pxPerMs = speed / 23; // camera advances `speed` px every 23ms firmware tick
+    const tokens = level.musicNotes.split(',').map((s) => s.trim()).filter(Boolean);
+    let worldX = 0;
+    let elapsedMs = 0;
+    for (const rawTok of tokens) {
+      const note = parseNoteTokenForPreview(rawTok, defDur, defOct);
+      if (!note) continue;
+      const seconds = (240 / (bpm * note.dur)) * Math.pow(1.5, note.dots || 0);
+      const ms = Math.max(1, seconds * 1000);
+      // startMs/endMs (playback-clock timing, independent of pxPerMs) let
+      // drawNoteOverlay figure out which mark is sounding right now.
+      if (!note.rest) marks.push({ x: worldX, name: freqToNoteName(note.freq), freq: note.freq, startMs: elapsedMs, endMs: elapsedMs + ms });
+      worldX += ms * pxPerMs;
+      elapsedMs += ms;
+    }
+  }
+  noteOverlayCache = { key, marks };
+  return marks;
+}
+
+/* Index into `marks` of the note currently sounding during an in-editor
+   playback started by playMusicPreview(), or -1 if nothing is playing /
+   nothing lines up (e.g. the notes field was edited after playback
+   started, or the current moment falls in a rest). */
+function currentlyPlayingMarkIndex(marks) {
+  const pb = state.playback;
+  if (!pb || !pb.active || !pb.audioCtx) return -1;
+  const elapsedMs = (pb.audioCtx.currentTime - pb.startAudioTime) * 1000;
+  if (elapsedMs < 0) return -1;
+  for (let i = 0; i < marks.length; i++) {
+    if (elapsedMs >= marks[i].startMs && elapsedMs < marks[i].endMs) return i;
+  }
+  return -1;
+}
+
+function drawNoteOverlay(width, height) {
+  if (!state.showNotes) return;
+  const marks = computeNoteWorldPositions();
+  if (!marks.length) return;
+  const playingIdx = currentlyPlayingMarkIndex(marks);
+
+  ctx.save();
+  ctx.font = '10px monospace';
+  ctx.textBaseline = 'top';
+  let lastLabelX = -Infinity;
+  for (let i = 0; i < marks.length; i++) {
+    const m = marks[i];
+    const playing = i === playingIdx;
+    const x = m.x * state.zoom - state.cameraX;
+    if (x < -20 || x > width + 20) continue;
+
+    ctx.globalAlpha = playing ? 0.9 : 0.35;
+    ctx.strokeStyle = ORANGE;
+    ctx.lineWidth = playing ? 2 : 1;
+    ctx.beginPath();
+    ctx.moveTo(Math.floor(x) + 0.5, 0);
+    ctx.lineTo(Math.floor(x) + 0.5, height);
+    ctx.stroke();
+
+    ctx.globalAlpha = 1.0;
+    if (playing) {
+      // solid backing behind the diamond so an orange-on-orange marker
+      // (drawn over the level's own orange objects) still reads clearly
+      ctx.fillStyle = ORANGE;
+      ctx.beginPath();
+      ctx.arc(x, 6, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = BLACK;
+    } else {
+      ctx.fillStyle = ORANGE;
+    }
+    const r = playing ? 6 : 4;
+    ctx.beginPath();
+    ctx.moveTo(x, 6 - r);
+    ctx.lineTo(x + r, 6);
+    ctx.lineTo(x, 6 + r);
+    ctx.lineTo(x - r, 6);
+    ctx.closePath();
+    ctx.fill();
+
+    // labels: always show the currently-playing note; otherwise skip
+    // ones that would overlap a denser run of notes
+    if (playing || x - lastLabelX > 24) {
+      ctx.globalAlpha = 1.0;
+      ctx.fillStyle = ORANGE;
+      if (playing) ctx.font = 'bold 11px monospace';
+      ctx.fillText(m.name, x + r + 1, 2);
+      if (playing) ctx.font = '10px monospace';
+      lastLabelX = x;
+    }
+  }
+  ctx.restore();
+}
+
+/* Hit-tests a pointer event's client coordinates against the note
+   markers drawn by drawNoteOverlay() (only live while state.showNotes is
+   on), so each marker acts as a clickable "button" that plays its note.
+   Matches the marker's own geometry: a diamond centered at screen y=6,
+   radius up to 6px when highlighted as currently-playing — the ±8px/
+   0..16px hit box below is a small, easy-to-hit superset of that. */
+function hitTestNoteMarker(clientX, clientY) {
+  if (!state.showNotes) return null;
+  const marks = computeNoteWorldPositions();
+  if (!marks.length) return null;
+  const rect = el.canvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  if (y < 0 || y > 16) return null;
+  const width = el.canvas.clientWidth;
+  for (const m of marks) {
+    const mx = m.x * state.zoom - state.cameraX;
+    if (mx < -20 || mx > width + 20) continue;
+    if (Math.abs(x - mx) <= 8) return m;
+  }
+  return null;
 }
 
 function render() {
@@ -555,14 +697,27 @@ function render() {
 
   state.level.decorations.forEach(drawDecoration);
   state.level.objects.forEach(drawObject);
+  drawNoteOverlay(width, height);
 
   if (state.hover) {
     const { gx, gy } = state.hover;
     const x = gridToScreenX(gx);
     const y = gridToScreenY(gy);
-    ctx.strokeStyle = ORANGE;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x + 1, y + 1, cell() - 2, cell() - 2);
+    const s = cell();
+    if (state.tool === 'ERASE') {
+      ctx.strokeStyle = ORANGE;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x + 1, y + 1, s - 2, s - 2);
+    } else {
+      /* Semi-transparent preview of the object that would be placed,
+         instead of a plain cell-highlight rectangle. */
+      drawSprite(state.tool, x, y, s, state.objectRotation, 0.45);
+      ctx.strokeStyle = ORANGE;
+      ctx.globalAlpha = 0.5;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, s - 1, s - 1);
+      ctx.globalAlpha = 1.0;
+    }
   }
 
   ctx.restore();
@@ -1201,13 +1356,45 @@ function parseNoteTokenForPreview(rawTok, defaultDur, defaultOctave) {
   return { rest, dur, freq, dots };
 }
 
+/* Plays a single short blip at `freq` via Web Audio — used to audition an
+   individual note (e.g. clicking its marker on the note overlay) without
+   touching the sequence-playback machinery below (previewOscillators/
+   state.playback), so it works freely whether or not a sequence is
+   currently playing. */
+function playBlipAtFrequency(freq) {
+  if (!freq || freq <= 0) return;
+  if (!previewAudioCtx) previewAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const audioCtx = previewAudioCtx;
+  const t = audioCtx.currentTime;
+  const dur = 0.35;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(freq, t);
+  gain.gain.setValueAtTime(0.15, t);
+  gain.gain.setValueAtTime(0.15, t + dur - 0.03);
+  gain.gain.linearRampToValueAtTime(0.0001, t + dur);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start(t);
+  osc.stop(t + dur);
+}
+
+function setPlayButtonsUI(isPlaying) {
+  if (el.musicPlayBtn) el.musicPlayBtn.textContent = isPlaying ? 'PLAYING…' : 'PLAY';
+  if (el.playToolbarBtn) {
+    el.playToolbarBtn.textContent = isPlaying ? 'STOP' : 'PLAY';
+    el.playToolbarBtn.classList.toggle('active', isPlaying);
+  }
+}
+
 function stopMusicPreview() {
   for (const osc of previewOscillators) {
     try { osc.stop(); } catch (e) { /* already stopped */ }
   }
   previewOscillators = [];
   if (previewStopTimer) { clearTimeout(previewStopTimer); previewStopTimer = null; }
-  if (el.musicPlayBtn) el.musicPlayBtn.textContent = 'PLAY';
+  state.playback.active = false;
+  setPlayButtonsUI(false);
 }
 
 function playMusicPreview() {
@@ -1224,6 +1411,13 @@ function playMusicPreview() {
   const defOct = Number(el.musicOctave.value) || 5;
 
   let t = ctx.currentTime + 0.05;
+  state.playback.active = true;
+  state.playback.audioCtx = ctx;
+  state.playback.startAudioTime = t;
+  // Surface the note overlay automatically so the playing-note highlight
+  // added by this playback is actually visible without a separate toggle.
+  state.showNotes = true;
+  if (el.notesToggleBtn) el.notesToggleBtn.classList.toggle('active', true);
   for (const rawTok of tokens) {
     const note = parseNoteTokenForPreview(rawTok, defDur, defOct);
     if (!note) continue;
@@ -1244,11 +1438,12 @@ function playMusicPreview() {
     t += seconds;
   }
 
-  el.musicPlayBtn.textContent = 'PLAYING…';
+  setPlayButtonsUI(true);
   const totalMs = Math.max(0, (t - ctx.currentTime) * 1000);
   previewStopTimer = setTimeout(() => {
-    if (el.musicPlayBtn) el.musicPlayBtn.textContent = 'PLAY';
     previewOscillators = [];
+    state.playback.active = false;
+    setPlayButtonsUI(false);
   }, totalMs);
 }
 
@@ -1740,9 +1935,17 @@ if (el.difficulty) el.difficulty.addEventListener('change', syncInputsToLevel);
 el.levelLength.addEventListener('input', syncInputsToLevel);
 
 if (el.musicBtn) el.musicBtn.addEventListener('click', openMusicEditor);
+if (el.notesToggleBtn) el.notesToggleBtn.addEventListener('click', () => {
+  state.showNotes = !state.showNotes;
+  el.notesToggleBtn.classList.toggle('active', state.showNotes);
+});
 if (el.musicCloseBtn) el.musicCloseBtn.addEventListener('click', closeMusicEditor);
 if (el.musicPlayBtn) el.musicPlayBtn.addEventListener('click', playMusicPreview);
 if (el.musicStopBtn) el.musicStopBtn.addEventListener('click', stopMusicPreview);
+if (el.playToolbarBtn) el.playToolbarBtn.addEventListener('click', () => {
+  if (state.playback.active) stopMusicPreview();
+  else playMusicPreview();
+});
 if (el.musicImportMidiBtn) el.musicImportMidiBtn.addEventListener('click', () => el.midiFileInput.click());
 if (el.midiFileInput) el.midiFileInput.addEventListener('change', () => {
   const file = el.midiFileInput.files && el.midiFileInput.files[0];
@@ -1759,7 +1962,7 @@ if (el.musicDuration) el.musicDuration.addEventListener('change', syncMusicToLev
 if (el.musicOctave) el.musicOctave.addEventListener('input', syncMusicToLevel);
 if (el.musicNotes) el.musicNotes.addEventListener('input', syncMusicToLevel);
 el.cameraX.addEventListener('input', () => {
-  state.cameraX = clamp(Number(el.cameraX.value) || 0, 0, Number(el.cameraX.max) || 0);
+  state.cameraX = clamp(Number(el.cameraX.value) || 0, 0, maxCameraX());
   render();
 });
 
@@ -1773,6 +1976,13 @@ window.addEventListener('keydown', (ev) => {
 
 el.canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
 el.canvas.addEventListener('pointerdown', (ev) => {
+  if (ev.button === 0) {
+    const hitMark = hitTestNoteMarker(ev.clientX, ev.clientY);
+    if (hitMark) {
+      playBlipAtFrequency(hitMark.freq);
+      return; // preview only — don't start placing/dragging
+    }
+  }
   el.canvas.setPointerCapture(ev.pointerId);
   state.dragging = true;
   state.dragButton = ev.button;
@@ -1797,15 +2007,22 @@ el.canvas.addEventListener('pointermove', (ev) => {
     const dx = ev.clientX - state.panStartX;
     const dy = ev.clientY - state.panStartY;
     // mouse move: update camera. cameraX is in pixels.
-    state.cameraX = clamp(state.panStartCameraX - dx, 0, Number(el.cameraX.max) || 0);
-    state.cameraY = clamp(state.panStartCameraY + dy, -80, 5 * cell());
+    state.cameraX = clamp(state.panStartCameraX - dx, 0, maxCameraX());
+    { const b = cameraYBounds(); state.cameraY = clamp(state.panStartCameraY + dy, b.min, b.max); }
     el.cameraX.value = String(Math.round(state.cameraX));
     render();
     return;
   }
 
+  if (!state.dragging && hitTestNoteMarker(ev.clientX, ev.clientY)) {
+    el.canvas.style.cursor = 'pointer';
+    state.hover = null;
+    return;
+  }
+  el.canvas.style.cursor = '';
+
   const { gx, gy } = screenToGrid(ev.clientX, ev.clientY);
-  state.hover = { gx, gy };
+  state.hover = isBuildableGy(gy) ? { gx, gy } : null;
   updateSelectionInfo(gx, gy);
   if (state.dragging) placeFromPointer(ev);
 });
@@ -1835,13 +2052,14 @@ el.canvas.addEventListener('wheel', (ev) => {
     const beforeWorldY = (hVisible() - py - state.cameraY) / cell();
     const factor = ev.deltaY > 0 ? 0.9 : 1.1;
     state.zoom = clamp(state.zoom * factor, 0.5, 6);
+    syncCameraXSliderMax(); // zoom changed -> the slider's own range needs to follow
     const s = cell();
-    state.cameraX = beforeWorldX * s - px;
-    state.cameraY = clamp(hVisible() - beforeWorldY * s - py, 0, 5 * cell());
+    state.cameraX = clamp(beforeWorldX * s - px, 0, maxCameraX());
+    { const b = cameraYBounds(); state.cameraY = clamp(hVisible() - beforeWorldY * s - py, b.min, b.max); }
     el.cameraX.value = String(Math.round(state.cameraX));
   } else {
     const delta = Math.sign(ev.deltaY) * cell() * 3;
-    state.cameraX = clamp(state.cameraX + delta, 0, Number(el.cameraX.max) || 0);
+    state.cameraX = clamp(state.cameraX + delta, 0, maxCameraX());
     el.cameraX.value = String(Math.round(state.cameraX));
   }
   render();
@@ -1876,11 +2094,11 @@ window.addEventListener('keydown', (ev) => {
 
   const step = cell() * 2;
   if (ev.key === 'ArrowLeft') {
-    state.cameraX = clamp(state.cameraX - step, 0, Number(el.cameraX.max) || 0);
+    state.cameraX = clamp(state.cameraX - step, 0, maxCameraX());
     el.cameraX.value = String(state.cameraX);
     render();
   } else if (ev.key === 'ArrowRight') {
-    state.cameraX = clamp(state.cameraX + step, 0, Number(el.cameraX.max) || 0);
+    state.cameraX = clamp(state.cameraX + step, 0, maxCameraX());
     el.cameraX.value = String(state.cameraX);
     render();
   } else if (ev.key === '1') {
