@@ -104,6 +104,42 @@ static void draw_jumper(Canvas* canvas, int sx, int sy) {
     draw_sprite(canvas, sx, sy, SPR_JUMPER);
 }
 
+/* Ambient particles drifting straight up out of the jumper pad, looping
+   within its own cell. Fully procedural (position derived from frame count
+   + a per-object seed) so no extra per-particle state needs to live in
+   GeoApp — cheap enough to animate every jumper on screen every frame. */
+static void draw_jumper_particles(Canvas* canvas, int sx, int sy, uint32_t frame, int16_t seed) {
+    const uint8_t count = 6;
+    /* SPR_JUMPER's glyph (outline + its hollow white interior) occupies the
+       bottom 3 rows — keep particles entirely above that band instead of
+       trying to dodge individual lit pixels. */
+    const uint8_t rise_h = CELL - 3;
+    uint32_t s = (uint32_t)(uint16_t)seed;
+    for(uint8_t p = 0; p < count; p++) {
+        /* per-particle cycle length varies so they don't all rise in lockstep;
+           slowed down (longer cycle) for a gentler drift */
+        uint32_t cycle = 30u + ((s + p * 13u) % 20u); /* 30..49 frames */
+        uint32_t t = (frame + s * 5u + p * 41u) % cycle;
+
+        /* deterministic hash -> chaotic horizontal wander */
+        uint32_t h = frame * 2654435761u + s * 2246822519u + p * 3266489917u;
+        h ^= h >> 15;
+        int base_x = 1 + (int)((s + p * 3u) % 6u); /* spread starting columns across the cell */
+        int lx = base_x + (int)(h % 5u) - 2;       /* jitter -2..2 */
+        if(lx < 0) lx = 0;
+        if(lx > CELL - 1) lx = CELL - 1;
+
+        int ly = (rise_h - 1) - (int)((t * rise_h) / cycle); /* bottom of the clear band -> top of the cell */
+        if(ly < 0) ly = 0;
+        if(ly > rise_h - 1) ly = rise_h - 1;
+
+        int px = sx + lx;
+        int py = sy + ly;
+        if(px < 0 || px >= SCREEN_W || py < 0 || py >= SCREEN_H) continue;
+        canvas_draw_dot(canvas, px, py);
+    }
+}
+
 static void draw_sphere(Canvas* canvas, int sx, int sy) {
     draw_sprite(canvas, sx, sy, SPR_SPHERE);
 }
@@ -272,8 +308,9 @@ static void draw_objects(Canvas* canvas, const GeoApp* app) {
             topY = ry;
             bottomY = ry + rh;
         } else if(o->type == OBJ_JUMPER) {
-            int jumper_h = 2;
-            topY = sy + CELL - jumper_h;
+            /* full cell height so the rising particle trail above the pad
+               isn't culled while the pad itself is still on-screen */
+            topY = sy;
             bottomY = sy + CELL;
         }
 
@@ -289,7 +326,10 @@ static void draw_objects(Canvas* canvas, const GeoApp* app) {
         case OBJ_SPIKE:       draw_spike_rotated(canvas, sx, sy, o->rot); break;
         case OBJ_MINI_SPIKE:  draw_mini_spike_rotated(canvas, sx, sy, o->rot); break;
         case OBJ_MINI_BLOCK:  draw_mini_block(canvas, sx, sy, o->rot); break;
-        case OBJ_JUMPER:      draw_jumper(canvas, sx, sy); break;
+        case OBJ_JUMPER:
+            draw_jumper(canvas, sx, sy);
+            draw_jumper_particles(canvas, sx, sy, app->frame, o->gx);
+            break;
         case OBJ_SPHERE:      draw_sphere(canvas, sx, sy); break;
         default: break;
         }
